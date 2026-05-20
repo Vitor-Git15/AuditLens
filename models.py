@@ -1,5 +1,12 @@
 from pydantic import BaseModel, Field
 from typing import Dict
+from enum import Enum
+
+class RunStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
 
 
 class SearchMetrics(BaseModel):
@@ -34,6 +41,13 @@ class ConfigParameters(BaseModel):
     use_mock: bool = Field(False, description="Use mock model data")
     subgroups_to_explore: list[str] = Field(default_factory=list, description="Subgroups to explore")
     subgroups_to_ignore: list[str] = Field(default_factory=list, description="Subgroups to ignore")
+    weights: Dict[str, float] = Field(default_factory=dict, description="User defined weights for feedback/direction")
+    max_gap: int = Field(5, description="Maximum gap constraint")
+    gamma: float = Field(0.5, description="Support penalty coefficient")
+    min_support: int = Field(10, description="Minimum support count")
+    min_count_class: int = Field(5, description="Minimum count per class")
+    uct_factor: float = Field(1.2, description="Exploration factor UCT")
+    jaccard_threshold: float = Field(0.3, description="Jaccard similarity threshold")
 
 class ConsumeRequest(BaseModel):
     amount: float

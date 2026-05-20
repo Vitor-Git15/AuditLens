@@ -70,13 +70,56 @@
         
         .main-content {
             grid-column: 1;
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            grid-template-rows: repeat(2, 1fr);
-            gap: 16px;
+            display: flex;
+            flex-direction: column;
             overflow-y: auto;
         }
         
+        .tabs-container {
+            display: flex;
+            gap: 16px;
+            border-bottom: 1px solid #27272a;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+        }
+        
+        .tab-btn {
+            background: none;
+            border: none;
+            color: #a1a1a6;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .tab-btn.active {
+            color: #e4e4e7;
+            border-bottom-color: #3b82f6;
+        }
+        
+        .tab-content {
+            display: none;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        
+        .tab-content.active {
+            display: grid;
+        }
+        
+        .filter-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            grid-column: 1 / -1;
+            padding: 8px;
+            background: #18181b;
+            border-radius: 8px;
+            border: 1px solid #27272a;
+        }
+
         .sidebar {
             grid-column: 2;
             grid-row: 2 / 4;
@@ -143,9 +186,6 @@
             color: #e4e4e7;
             border-color: #4b5563;
         }
-            gap: 8px;
-        }
-
         .chart-icon {
             width: 16px;
             height: 16px;
@@ -262,9 +302,9 @@
                     </div>
                 </div>
                 <div class="h-6 w-px bg-zinc-700"></div>
-                <div class="flex items-center gap-2 text-xs text-zinc-400">
-                    <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                    <span>Live Analysis</span>
+                <div class="flex items-center gap-2 text-xs text-zinc-400" id="run-status-container">
+                    <div class="w-2 h-2 bg-slate-500 rounded-full" id="run-status-dot"></div>
+                    <span id="run-status-text">Idle</span>
                 </div>
             </div>
             <div class="flex items-center gap-4">
@@ -281,6 +321,18 @@
                         </svg>
                         Start Audit
                     </button>
+                    <button id="btn-pause-audit" class="px-4 py-2 bg-yellow-900 hover:bg-yellow-800 text-yellow-100 rounded-md text-sm font-medium transition-colors hidden">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Pause
+                    </button>
+                    <button id="btn-finish-audit" class="px-4 py-2 bg-emerald-900 hover:bg-emerald-800 text-emerald-100 rounded-md text-sm font-medium transition-colors hidden">
+                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        Finish
+                    </button>
                     <button id="btn-settings" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md text-sm font-medium transition-colors">
                         <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
@@ -288,13 +340,19 @@
                         </svg>
                         Settings
                     </button>
+                    <button id="btn-reset-run" class="px-4 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-200 rounded-md text-sm font-medium transition-colors border border-red-900/50">
+                        <svg class="w-4 h-4 inline mr-2 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                        </svg>
+                        Clear Run
+                    </button>
                 </div>
                 <div id="status-indicator" class="w-2 h-2 bg-slate-600 rounded-full"></div>
             </div>
         </header>
 
         <!-- KPI Section -->
-        <div class="kpi-section rounded-lg">
+        <div id="kpi-section" class="kpi-section rounded-lg">
             <div class="kpi-card" style="min-width: 280px;">
                 <div class="kpi-label text-blue-400">Best Pattern</div>
                 <div class="kpi-value text-blue-100" id="kpi-pattern" style="font-size: 13px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</div>
@@ -323,89 +381,100 @@
         </div>
 
         <!-- Main Content -->
-        <div id="charts-container" class="main-content">
-            <!-- Chart 1: Quality Scatter -->
-            <div class="chart-container rounded-lg overflow-hidden">
-                <div class="chart-header">
-                    <h3 class="chart-title">
-                        <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l4-4m0 0l-4 4m4-4H9a7 7 0 00-7 7v8a2 2 0 002 2h2m8-4a2 2 0 102 2m-6-6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V8z"></path>
-                        </svg>
-                        Quality vs Support Analysis
-                    </h3>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs text-slate-400 bg-slate-700 px-2 py-1 rounded-full">Scatter</span>
-                        <button class="add-chart-btn" onclick="app.addNewVisualization('quality-scatter')" title="Add similar chart">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+        <div class="main-content">
+            <!-- Evolution & Exploration Timeline -->
+            <div id="timeline-exploration-container" class="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-4 hidden">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div class="flex items-center gap-3">
+                        <button id="btn-timeline-play" class="p-2 bg-blue-900 hover:bg-blue-800 text-blue-100 rounded-full transition-colors flex items-center justify-center w-8 h-8">
+                            <svg id="timeline-play-icon" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z"></path>
+                            </svg>
+                            <svg id="timeline-pause-icon" class="w-3.5 h-3.5 hidden" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
                             </svg>
                         </button>
+                        <div>
+                            <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider block">Budget Run Evolution Explorer</span>
+                            <span id="timeline-label" class="text-[11px] text-zinc-400 font-mono">Iteration 0 of 0</span>
+                        </div>
+                    </div>
+                    <div class="flex-grow flex items-center gap-3 px-2">
+                        <span class="text-[10px] text-zinc-500 font-mono">Start</span>
+                        <input type="range" id="timeline-slider" min="1" max="1" value="1" class="flex-grow h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                        <span class="text-[10px] text-zinc-500 font-mono">End</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-zinc-400">Step Interval:</span>
+                        <select id="timeline-speed" class="bg-zinc-850 text-zinc-300 border border-zinc-700 text-xs rounded px-2 py-1">
+                            <option value="1000">1.0s</option>
+                            <option value="400" selected>0.4s</option>
+                            <option value="150">0.15s</option>
+                        </select>
                     </div>
                 </div>
-                <div class="chart-content" id="chart-metrics"></div>
             </div>
 
-            <!-- Chart 2: Error Distribution -->
-            <div class="chart-container rounded-lg overflow-hidden">
-                <div class="chart-header">
-                    <h3 class="chart-title">
-                        <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                        </svg>
-                        Error Distribution
-                    </h3>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs text-slate-400 bg-slate-700 px-2 py-1 rounded-full">Bar</span>
-                        <button class="add-chart-btn" onclick="app.addNewVisualization('error-distribution')" title="Add similar chart">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="chart-content" id="chart-quality"></div>
+            <div class="tabs-container">
+                <button class="tab-btn active" data-tab="global-view">Global View</button>
+                <button class="tab-btn" data-tab="individual-patterns">Individual Patterns</button>
             </div>
 
-            <!-- Chart 3: Quality Scatter Alt -->
-            <div class="chart-container rounded-lg overflow-hidden">
-                <div class="chart-header">
-                    <h3 class="chart-title">
-                        <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l4-4m0 0l-4 4m4-4H9a7 7 0 00-7 7v8a2 2 0 002 2h2m8-4a2 2 0 102 2m-6-6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V8z"></path>
-                        </svg>
-                        Quality Scatter Plot
-                    </h3>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs text-slate-400 bg-slate-700 px-2 py-1 rounded-full">Scatter</span>
-                        <button class="add-chart-btn" onclick="app.addNewVisualization('quality-scatter')" title="Add similar chart">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+            <!-- Global View Tab -->
+            <div id="global-view" class="tab-content active">
+                <!-- Chart 1: Quality Scatter -->
+                <div class="chart-container rounded-lg overflow-hidden">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l4-4m0 0l-4 4m4-4H9a7 7 0 00-7 7v8a2 2 0 002 2h2m8-4a2 2 0 102 2m-6-6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V8z"></path>
                             </svg>
-                        </button>
+                            Quality vs Support Analysis
+                        </h3>
+                    </div>
+                    <div class="chart-content" id="chart-metrics"></div>
+                </div>
+
+                <!-- Chart 2: Error Distribution -->
+                <div class="chart-container rounded-lg overflow-hidden">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            Error Distribution
+                        </h3>
+                    </div>
+                    <div class="chart-content" id="chart-quality"></div>
+                </div>
+
+                <!-- Card 3: MCTS Tree Diagnostics -->
+                <div class="chart-container rounded-lg overflow-hidden col-span-2 p-4 bg-zinc-900 border border-zinc-800" style="min-height: 200px;">
+                    <div class="chart-header -mx-4 -mt-4 mb-4">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 16px; height: 16px;">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path>
+                            </svg>
+                            MCTS Tree Diagnostics & Progress (Anytime)
+                        </h3>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6" id="tree-diagnostics-container">
+                        <!-- Filled by JS -->
                     </div>
                 </div>
-                <div class="chart-content" id="chart-support"></div>
             </div>
 
-            <!-- Chart 4: Error Distribution Alt -->
-            <div class="chart-container rounded-lg overflow-hidden">
-                <div class="chart-header">
-                    <h3 class="chart-title">
-                        <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                        </svg>
-                        Error Analysis
-                    </h3>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs text-slate-400 bg-slate-700 px-2 py-1 rounded-full">Bar</span>
-                        <button class="add-chart-btn" onclick="app.addNewVisualization('error-distribution')" title="Add similar chart">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                            </svg>
-                        </button>
-                    </div>
+            <!-- Individual Patterns Tab -->
+            <div id="individual-patterns" class="tab-content" style="grid-template-columns: 1fr;">
+                <div class="filter-container">
+                    <label for="top-x-filter" class="text-sm font-medium text-slate-300">Show Top:</label>
+                    <input type="number" id="top-x-filter" value="10" min="1" max="500" class="form-input" style="width: 80px;">
+                    <button id="btn-apply-filter" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-sm ml-2">Apply</button>
+                    <button id="btn-fetch-logs" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-blue-100 rounded text-sm ml-auto">Fetch Latest Data</button>
                 </div>
-                <div class="chart-content" id="chart-errors"></div>
+                
+                <!-- Redesigned Pattern Detail Container -->
+                <div id="pattern-details-container" class="col-span-2 w-full"></div>
             </div>
         </div>
 
@@ -434,6 +503,57 @@
                             <label class="form-label" for="subgroups-ignore">Subgroups to Ignore</label>
                             <textarea id="subgroups-ignore" name="subgroups_ignore" class="form-textarea" placeholder="Comma-separated: group1, group2"></textarea>
                         </div>
+                        <div class="form-group">
+                            <label class="form-label" for="weights-input">Algorithm Weights (JSON)</label>
+                            <textarea id="weights-input" name="weights_input" class="form-textarea" placeholder='{"quality": 1.0, "support": 0.5}'></textarea>
+                        </div>
+                        
+                        <div class="border-t border-zinc-800 pt-4 mt-4 space-y-4">
+                            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Search Parameters</h3>
+                            
+                            <div class="form-group">
+                                <label class="form-label flex justify-between items-center" for="max-gap">
+                                    <span>Max Gap</span>
+                                    <span id="max-gap-val" class="text-blue-400 font-mono font-bold">5</span>
+                                </label>
+                                <input type="range" id="max-gap" name="max_gap" min="1" max="20" value="5" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label flex justify-between items-center" for="gamma">
+                                    <span>Support Penalty (γ)</span>
+                                    <span id="gamma-val" class="text-blue-400 font-mono font-bold">0.50</span>
+                                </label>
+                                <input type="range" id="gamma" name="gamma" min="0" max="1" step="0.01" value="0.50" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="min-support">Min Support</label>
+                                <input type="number" id="min-support" name="min_support" value="10" min="1" class="form-input">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="min-count-class">Min Count Per Class</label>
+                                <input type="number" id="min-count-class" name="min_count_class" value="5" min="1" class="form-input">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label flex justify-between items-center" for="uct-factor">
+                                    <span>UCT Exploration Constant</span>
+                                    <span id="uct-factor-val" class="text-blue-400 font-mono font-bold">1.20</span>
+                                </label>
+                                <input type="range" id="uct-factor" name="uct_factor" min="0.1" max="5" step="0.1" value="1.20" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label flex justify-between items-center" for="jaccard-threshold">
+                                    <span>Jaccard Threshold (θ)</span>
+                                    <span id="jaccard-threshold-val" class="text-blue-400 font-mono font-bold">0.30</span>
+                                </label>
+                                <input type="range" id="jaccard-threshold" name="jaccard_threshold" min="0" max="1" step="0.05" value="0.30" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                            </div>
+                        </div>
+
                         <button type="submit" class="btn-submit">Submit Config</button>
                     </form>
                 </div>
