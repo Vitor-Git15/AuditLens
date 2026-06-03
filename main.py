@@ -61,19 +61,32 @@ class ConfigurationState:
     
     def update(self, config: ConfigParameters):
         """Update configuration from API."""
-        self.budgets = config.budgets if config.budgets is not None else {"search": 0.0}
-        self.subgroups_to_explore = config.subgroups_to_explore if config.subgroups_to_explore is not None else []
-        self.subgroups_to_ignore = config.subgroups_to_ignore if config.subgroups_to_ignore is not None else []
-        self.weights = config.weights if config.weights is not None else {}
-        self.use_mock = config.use_mock if config.use_mock is not None else False
-        self.max_gap = config.max_gap if config.max_gap is not None else 5
-        self.gamma = config.gamma if config.gamma is not None else 0.5
-        self.min_support = config.min_support if config.min_support is not None else 10
-        self.min_count_class = config.min_count_class if config.min_count_class is not None else 5
-        self.uct_factor = config.uct_factor if config.uct_factor is not None else 1.2
-        self.jaccard_threshold = config.jaccard_threshold if config.jaccard_threshold is not None else 0.3
-        self.budget_consumed = 0.0
-        self.status = RunStatus.RUNNING if self.get_remaining_budget() > 0 else RunStatus.IDLE
+        if config.budgets is not None:
+            self.budgets = config.budgets
+            self.budget_consumed = 0.0
+            if self.get_remaining_budget() > 0:
+                self.status = RunStatus.RUNNING
+
+        if config.subgroups_to_explore is not None:
+            self.subgroups_to_explore = config.subgroups_to_explore
+        if config.subgroups_to_ignore is not None:
+            self.subgroups_to_ignore = config.subgroups_to_ignore
+        if config.weights is not None:
+            self.weights = config.weights
+        if config.use_mock is not None:
+            self.use_mock = config.use_mock
+        if config.max_gap is not None:
+            self.max_gap = config.max_gap
+        if config.gamma is not None:
+            self.gamma = config.gamma
+        if config.min_support is not None:
+            self.min_support = config.min_support
+        if config.min_count_class is not None:
+            self.min_count_class = config.min_count_class
+        if config.uct_factor is not None:
+            self.uct_factor = config.uct_factor
+        if config.jaccard_threshold is not None:
+            self.jaccard_threshold = config.jaccard_threshold
     
     def get_remaining_budget(self) -> float:
         """Get remaining search budget."""
@@ -685,6 +698,8 @@ async def control_run(action: str):
     if action == "pause":
         config_state.status = RunStatus.PAUSED
     elif action == "resume":
+        if config_state.get_remaining_budget() <= 0:
+            config_state.budget_consumed = 0.0
         config_state.status = RunStatus.RUNNING
     elif action == "finish":
         config_state.status = RunStatus.COMPLETED
@@ -773,6 +788,8 @@ async def control_post(payload: dict = Body(...)):
     if action == 'pause':
         config_state.status = RunStatus.PAUSED
     elif action == 'resume':
+        if config_state.get_remaining_budget() <= 0:
+            config_state.budget_consumed = 0.0
         config_state.status = RunStatus.RUNNING
     elif action == 'finish':
         config_state.status = RunStatus.COMPLETED
