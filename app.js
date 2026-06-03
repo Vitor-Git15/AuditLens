@@ -41,18 +41,59 @@ class BaseVisualizer {
         this.chart = echarts.init(container, 'dark');
         this.data = [];
         this.setupResizeListener();
+        setTimeout(() => {
+            if (this.chart) {
+                this.chart.resize();
+            }
+        }, 50);
     }
 
     setupResizeListener() {
         const resizeObserver = new ResizeObserver(() => {
-            this.chart.resize();
+            if (this.chart) {
+                this.chart.resize();
+            }
         });
         resizeObserver.observe(this.container);
     }
 
+    hasCompatibleData() {
+        return true; // Default, subclasses can override
+    }
+
+    showEmptyState() {
+        if (this.chart) {
+            this.chart.dispose();
+            this.chart = null;
+        }
+        this.container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full w-full p-6 text-center select-none" style="min-height: 250px;">
+                <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                    No visualization data has been transmitted for this metric in the current execution cycle.
+                </p>
+            </div>
+        `;
+    }
+
     update(data) {
         this.data = data;
-        this.render();
+        if (!this.hasCompatibleData()) {
+            this.showEmptyState();
+        } else {
+            if (!this.chart) {
+                this.container.innerHTML = '';
+                this.chart = echarts.init(this.container, 'dark');
+                setTimeout(() => {
+                    if (this.chart) {
+                        this.chart.resize();
+                    }
+                }, 50);
+            }
+            this.render();
+        }
     }
 
     getRenderData() {
@@ -98,11 +139,38 @@ class BaseVisualizer {
  * X: support_percentage, Y: quality_score_phi, bubble size: delta_g
  */
 class QualityScatter extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.discovered_patterns && latest.discovered_patterns.length > 0;
+    }
+
+    getRenderData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return [];
+        const latest = snapshots[snapshots.length - 1];
+        return latest.discovered_patterns || [];
+    }
+
     render() {
         const renderData = this.getRenderData();
+        
+        // Prepare scatter data
+        const scatterData = renderData.map(d => {
+            const attrs = d.attributes || {};
+            const supPct = attrs.support_percentage || 0.0;
+            const contrast = attrs.delta_g || attrs.contrast_metric || 0.0;
+            const quality = d.quality_score || 0.0;
+            const wracc = attrs.wracc || 0.0;
+            const efficiency = attrs.efficiency || 0.0;
+            const supportCount = attrs.support || 0;
+            return [supPct, contrast, quality, wracc, efficiency, d.id, supportCount];
+        });
+
         const option = {
             title: {
-                text: 'Quality Score vs Support Percentage',
+                text: 'Priority Matrix (4-Quadrant Analysis)',
                 left: 'center',
                 top: 10,
                 textStyle: {
@@ -117,59 +185,160 @@ class QualityScatter extends BaseVisualizer {
                 borderColor: '#27272a',
                 textStyle: { color: '#e4e4e7' },
                 formatter: (params) => {
-                    if (params.componentSubType === 'scatter') {
-                        const d = renderData[params.dataIndex];
-                        return `<div style="font-size: 11px; line-height: 1.5;">
-                            <strong>Slice ${params.dataIndex + 1}</strong><br/>
-                            Support: ${d.support_percentage.toFixed(2)}%<br/>
-                            Quality: ${d.quality_score_phi.toFixed(4)}<br/>
-                            Soft Error: ${d.soft_error.toFixed(4)}<br/>
-                            P-Value: ${d.p_value_bh.toFixed(4)}<br/>
-                            Count: ${d.support_count}
-                        </div>`;
-                    }
+                    const val = params.value;
+                    if (!val) return '';
+                    const supPct = val[0];
+                    const contrast = val[1];
+                    const quality = val[2];
+                    const wracc = val[3];
+                    const efficiency = val[4];
+                    const id = val[5];
+                    const count = val[6];
+                    return `<div style="font-size: 11px; line-height: 1.5; padding: 4px;">
+                        <strong style="color: #60a5fa; font-size: 12px;">Slice: ${id}</strong><br/>
+                        <strong>Support (Coverage):</strong> ${supPct.toFixed(2)}% (${count})<br/>
+                        <strong>Contrast Strength:</strong> ${contrast.toFixed(4)}<br/>
+                        <strong>WRAcc Contrast:</strong> ${wracc.toFixed(4)}<br/>
+                        <strong>Efficiency:</strong> ${efficiency.toFixed(4)}<br/>
+                        <strong>Quality Score (φ):</strong> ${quality.toFixed(4)}
+                    </div>`;
                 }
             },
             xAxis: {
                 type: 'value',
                 name: 'Support Percentage (%)',
                 nameLocation: 'middle',
-                nameGap: 30,
+                nameGap: 25,
+                min: 0,
+                max: 'dataMax',
                 axisLine: { lineStyle: { color: '#3f3f46' } },
                 axisLabel: { color: '#a1a1a6', formatter: '{value}%' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
             yAxis: {
                 type: 'value',
-                name: 'Quality Score (φ)',
+                name: 'Contrast Strength (Δg)',
                 nameLocation: 'middle',
-                nameGap: 40,
+                nameGap: 30,
+                min: 0,
+                max: 'dataMax',
                 axisLine: { lineStyle: { color: '#3f3f46' } },
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
-            grid: { left: '8%', right: '5%', bottom: '12%', top: '15%', containLabel: true },
+            grid: { left: '12%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
             series: [
                 {
-                    name: 'Quality vs Support',
+                    name: 'Slices',
                     type: 'scatter',
-                    data: renderData.map(d => [d.support_percentage, d.quality_score_phi, d.delta_g]),
-                    symbolSize: (val) => Math.max(6, Math.min(20, val[2] * 15)),
+                    data: scatterData,
+                    symbolSize: (val) => Math.max(8, Math.min(25, val[2] * 22)),
                     itemStyle: { 
-                        color: '#0ea5e9',
-                        borderColor: '#06b6d4',
-                        borderWidth: 1
+                        color: '#3b82f6',
+                        borderColor: '#60a5fa',
+                        borderWidth: 1.5
                     },
                     emphasis: { 
                         itemStyle: { 
-                            color: '#00d9ff',
+                            color: '#60a5fa',
                             borderWidth: 2
                         } 
+                    },
+                    markLine: {
+                        silent: true,
+                        symbol: 'none',
+                        lineStyle: { type: 'dashed', color: '#4b5563', width: 1.5 },
+                        data: [
+                            { xAxis: 15 },
+                            { yAxis: 0.2 }
+                        ]
+                    },
+                    markArea: {
+                        silent: true,
+                        data: [
+                            // High Priority: X > 15%, Y > 0.2
+                            [
+                                {
+                                    name: 'High Priority',
+                                    xAxis: 15,
+                                    yAxis: 0.2,
+                                    itemStyle: { color: 'rgba(239, 68, 68, 0.08)' },
+                                    label: { position: 'insideTopRight', color: '#f87171', fontSize: 10, fontWeight: 'bold' }
+                                },
+                                {
+                                    xAxis: 'max',
+                                    yAxis: 'max'
+                                }
+                            ],
+                            // Niche Subgroups: X <= 15%, Y > 0.2
+                            [
+                                {
+                                    name: 'Niche Subgroups',
+                                    xAxis: 0,
+                                    yAxis: 0.2,
+                                    itemStyle: { color: 'rgba(59, 130, 246, 0.08)' },
+                                    label: { position: 'insideTopLeft', color: '#60a5fa', fontSize: 10, fontWeight: 'bold' }
+                                },
+                                {
+                                    xAxis: 15,
+                                    yAxis: 'max'
+                                }
+                            ],
+                            // Noise: X <= 15%, Y <= 0.2
+                            [
+                                {
+                                    name: 'Noise',
+                                    xAxis: 0,
+                                    yAxis: 0,
+                                    itemStyle: { color: 'rgba(113, 113, 122, 0.04)' },
+                                    label: { position: 'insideBottomLeft', color: '#71717a', fontSize: 10, fontWeight: 'bold' }
+                                },
+                                {
+                                    xAxis: 15,
+                                    yAxis: 0.2
+                                }
+                            ],
+                            // Ignore: X > 15%, Y <= 0.2
+                            [
+                                {
+                                    name: 'Ignore',
+                                    xAxis: 15,
+                                    yAxis: 0,
+                                    itemStyle: { color: 'rgba(39, 39, 42, 0.08)' },
+                                    label: { position: 'insideBottomRight', color: '#52525b', fontSize: 10, fontWeight: 'bold' }
+                                },
+                                {
+                                    xAxis: 'max',
+                                    yAxis: 0.2
+                                }
+                            ]
+                        ]
                     }
                 }
             ]
         };
+
         this.chart.setOption(option);
+
+        // Bind click event
+        this.chart.off('click');
+        this.chart.on('click', (params) => {
+            if (params.componentSubType === 'scatter') {
+                const val = params.value;
+                if (val && val[5]) {
+                    const patternId = val[5];
+                    const detailsViz = window.app.visualizers.get('pattern-details-pattern-details-container');
+                    if (detailsViz) {
+                        detailsViz.selectedPatternId = patternId;
+                        detailsViz.render();
+                    }
+                    const tabBtn = document.querySelector('.tab-btn[data-tab="individual-patterns"]');
+                    if (tabBtn) {
+                        tabBtn.click();
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -178,11 +347,25 @@ class QualityScatter extends BaseVisualizer {
  * Bar chart with error bars for std_error_sigma
  */
 class ErrorDistribution extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.discovered_patterns && latest.discovered_patterns.length > 0;
+    }
+
+    getRenderData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return [];
+        const latest = snapshots[snapshots.length - 1];
+        return latest.discovered_patterns || [];
+    }
+
     render() {
         const renderData = this.getRenderData();
         const option = {
             title: {
-                text: 'Mean Error with Standard Deviation',
+                text: 'Slice Contrast Strength vs WRAcc Contrast',
                 left: 'center',
                 top: 10,
                 textStyle: {
@@ -199,48 +382,46 @@ class ErrorDistribution extends BaseVisualizer {
                 formatter: (params) => {
                     if (params.length > 0) {
                         const d = renderData[params[0].dataIndex];
-                        return `<div style="font-size: 11px; line-height: 1.5;">
-                            <strong>Slice ${params[0].dataIndex + 1}</strong><br/>
-                            Mean Error: ${d.mean_error_mu.toFixed(4)}<br/>
-                            Class 0 Error: ${d.error_class_0.toFixed(4)}<br/>
-                            Class 1 Error: ${d.error_class_1.toFixed(4)}<br/>
-                            Std Dev: ±${d.std_error_sigma.toFixed(4)}<br/>
-                            Range: [${(d.mean_error_mu - d.std_error_sigma).toFixed(4)}, ${(d.mean_error_mu + d.std_error_sigma).toFixed(4)}]<br/>
-                            Support: ${d.support_count} (${d.support_percentage.toFixed(1)}%)
+                        return `<div style="font-size: 11px; line-height: 1.5; padding: 4px;">
+                            <strong style="color: #60a5fa; font-size: 12px;">Slice: ${d.id}</strong><br/>
+                            <strong>Contrast Strength (Δg):</strong> ${(d.attributes.delta_g || 0).toFixed(4)}<br/>
+                            <strong>WRAcc Contrast:</strong> ${(d.attributes.wracc || 0).toFixed(4)}<br/>
+                            <strong>Coverage:</strong> ${(d.attributes.support_percentage || 0).toFixed(1)}% (${d.attributes.support})
                         </div>`;
                     }
                 }
             },
-            grid: { left: '8%', right: '5%', bottom: '12%', top: '15%', containLabel: true },
+            legend: {
+                data: ['Contrast Strength (Δg)', 'WRAcc Contrast'],
+                textStyle: { color: '#a1a1a6' },
+                bottom: 10
+            },
+            grid: { left: '12%', right: '5%', bottom: '20%', top: '15%', containLabel: true },
             xAxis: {
                 type: 'category',
-                data: renderData.map((d, i) => d.pattern_descriptor || `S${i + 1}`),
-                name: 'Slice Index',
-                nameLocation: 'middle',
-                nameGap: 30,
+                data: renderData.map(d => d.id),
                 axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6', fontSize: 10 }
+                axisLabel: { color: '#a1a1a6', fontSize: 10, rotate: 20 }
             },
             yAxis: {
                 type: 'value',
-                name: 'Error Value',
-                nameLocation: 'middle',
-                nameGap: 40,
+                name: 'Value',
                 axisLine: { lineStyle: { color: '#3f3f46' } },
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
             series: [
                 {
-                    name: 'Mean Error',
-                    data: renderData.map(d => ({
-                        value: d.mean_error_mu,
-                        errorPlus: d.std_error_sigma,
-                        errorMinus: d.std_error_sigma
-                    })),
+                    name: 'Contrast Strength (Δg)',
                     type: 'bar',
-                    itemStyle: { color: '#f97316' },
-                    emphasis: { itemStyle: { color: '#fb923c' } },
+                    data: renderData.map(d => d.attributes.delta_g || d.attributes.contrast_metric || 0),
+                    itemStyle: { color: '#ef4444' }
+                },
+                {
+                    name: 'WRAcc Contrast',
+                    type: 'bar',
+                    data: renderData.map(d => d.attributes.wracc || 0),
+                    itemStyle: { color: '#3b82f6' }
                 }
             ]
         };
@@ -253,6 +434,10 @@ class ErrorDistribution extends BaseVisualizer {
  * Line chart to show progression over time
  */
 class MetricsEvolution extends BaseVisualizer {
+    hasCompatibleData() {
+        return Array.isArray(this.data) && this.data.length > 0;
+    }
+
     render() {
         if (!this.data || this.data.length === 0) return;
         const option = {
@@ -278,7 +463,7 @@ class MetricsEvolution extends BaseVisualizer {
                 min: 'dataMin',
                 max: 'dataMax'
             },
-            grid: { left: '10%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
+            grid: { left: '12%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
             series: [
                 {
                     name: 'Top 10 Avg Quality',
@@ -306,6 +491,10 @@ class MetricsEvolution extends BaseVisualizer {
  * Class Balance Pie Chart
  */
 class ClassBalancePie extends BaseVisualizer {
+    hasCompatibleData() {
+        return Array.isArray(this.data) && this.data.length > 0;
+    }
+
     render() {
         if (!this.data || this.data.length === 0) return;
         const latest = this.data[this.data.length - 1];
@@ -339,6 +528,10 @@ class ClassBalancePie extends BaseVisualizer {
  * Shows multiple metrics across top slices
  */
 class SlicesHeatmap extends BaseVisualizer {
+    hasCompatibleData() {
+        return Array.isArray(this.data) && this.data.length > 0;
+    }
+
     render() {
         if (!this.data || this.data.length === 0) return;
         
@@ -365,7 +558,7 @@ class SlicesHeatmap extends BaseVisualizer {
                     return `Slice ${params.value[1] + 1}<br/>${metrics[params.value[0]]}: ${val}`;
                 }
             },
-            grid: { left: '15%', right: '10%', bottom: '15%', top: '5%' },
+            grid: { left: '12%', right: '10%', bottom: '15%', top: '5%', containLabel: true },
             xAxis: {
                 type: 'category',
                 data: metrics,
@@ -414,10 +607,8 @@ class SearchMetricsKPI {
     }
 
     update(searchMetrics) {
-        if (searchMetrics) {
-            this.data = searchMetrics;
-            this.render();
-        }
+        this.data = searchMetrics || {};
+        this.render();
     }
 
     render() {
@@ -426,6 +617,8 @@ class SearchMetricsKPI {
         const kpiSlices = document.getElementById('kpi-slices');
         const kpiPattern = document.getElementById('kpi-pattern');
         const kpiAvgQuality = document.getElementById('kpi-avg-quality');
+        const kpiExplorationCost = document.getElementById('kpi-exploration-cost');
+        const kpiExplorationCostSub = document.getElementById('kpi-exploration-cost-sub');
 
         if (kpiPatterns) {
             kpiPatterns.textContent = this.data.explored_patterns || 0;
@@ -443,6 +636,15 @@ class SearchMetricsKPI {
         if (kpiAvgQuality) {
             kpiAvgQuality.textContent = this.data.top10_avg_quality ? this.data.top10_avg_quality.toFixed(4) : '0.0000';
         }
+        if (kpiExplorationCost) {
+            const timeGained = this.data.budget_consumed || 0.0;
+            const slicesFound = this.data._sliceCount || 0;
+            kpiExplorationCost.textContent = `${timeGained.toFixed(1)}s / ${slicesFound} slices`;
+            if (kpiExplorationCostSub) {
+                const ratio = slicesFound > 0 ? (timeGained / slicesFound) : 0.0;
+                kpiExplorationCostSub.textContent = `Ratio: ${ratio.toFixed(2)}s/slice`;
+            }
+        }
     }
 
     dispose() {
@@ -454,19 +656,43 @@ class SearchMetricsKPI {
  * Convergence Chart - Step chart showing quality progression
  */
 class ConvergenceChart extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.anytime_quality && latest.global_metrics.anytime_quality.length > 0;
+    }
+
     render() {
-        if (!this.data || this.data.length === 0) return;
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const history = latest.global_metrics.anytime_quality || [];
+
         const option = {
             title: { text: 'Quality Convergence', left: 'center', top: 10, textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' } },
-            tooltip: { trigger: 'axis', backgroundColor: '#18181b', borderColor: '#27272a', textStyle: { color: '#e4e4e7' } },
+            tooltip: { 
+                trigger: 'axis', 
+                backgroundColor: '#18181b', 
+                borderColor: '#27272a', 
+                textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const p = params[0];
+                    if (!p || !p.value) return '';
+                    return `<div style="font-size: 11px; padding: 4px; line-height: 1.5;">
+                        <strong>Elapsed Time:</strong> ${p.value[0].toFixed(2)}s<br/>
+                        <strong>Top Quality φ:</strong> ${p.value[1].toFixed(4)}
+                    </div>`;
+                }
+            },
             xAxis: {
-                type: 'category',
-                name: 'Iteration',
+                type: 'value',
+                name: 'Elapsed Time (s)',
                 nameLocation: 'middle',
-                nameGap: 30,
-                data: this.data.map((_, i) => i),
+                nameGap: 25,
                 axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6' }
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
             },
             yAxis: {
                 type: 'value',
@@ -477,12 +703,12 @@ class ConvergenceChart extends BaseVisualizer {
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
-            grid: { left: '10%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
+            grid: { left: '12%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
             series: [{
                 name: 'Top Quality',
                 type: 'line',
-                step: 'middle',
-                data: this.data.map(d => d.quality_score_phi || 0),
+                step: 'start',
+                data: history,
                 itemStyle: { color: '#10b981' },
                 lineStyle: { width: 2 },
                 areaStyle: { color: 'rgba(16, 185, 129, 0.2)' }
@@ -496,6 +722,10 @@ class ConvergenceChart extends BaseVisualizer {
  * Bubble Chart - Quality vs Support with complexity as bubble size
  */
 class BubbleChartViz extends BaseVisualizer {
+    hasCompatibleData() {
+        return Array.isArray(this.data) && this.data.length > 0;
+    }
+
     render() {
         if (!this.data || this.data.length === 0) return;
         const bubbleData = this.data.map(d => ({
@@ -534,7 +764,7 @@ class BubbleChartViz extends BaseVisualizer {
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
-            grid: { left: '10%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
+            grid: { left: '12%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
             series: [{
                 name: 'Patterns',
                 type: 'scatter',
@@ -543,6 +773,285 @@ class BubbleChartViz extends BaseVisualizer {
                 emphasis: { itemStyle: { color: '#00d9ff', borderWidth: 2 } }
             }]
         };
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * Pareto Frontier Visualizer
+ * Scatter plot and line curve for Quality vs. Support Pareto-optimal frontier
+ */
+class ParetoFrontier extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.pareto_frontier && latest.global_metrics.pareto_frontier.length > 0;
+    }
+
+    showEmptyState() {
+        if (this.chart) {
+            this.chart.dispose();
+            this.chart = null;
+        }
+        this.container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full w-full p-6 text-center select-none" style="min-height: 250px;">
+                <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                    No visualization data has been transmitted for this metric in the current execution cycle.
+                </p>
+            </div>
+        `;
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const pareto = latest.global_metrics.pareto_frontier || [];
+
+        const option = {
+            title: {
+                text: 'Pareto Frontier (Quality vs. Support)',
+                left: 'center',
+                top: 10,
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
+            },
+            tooltip: {
+                trigger: 'item',
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const val = params.value;
+                    if (!val) return '';
+                    return `<div style="font-size: 11px; padding: 4px; line-height: 1.5;">
+                        <strong style="color: #60a5fa; font-size: 12px;">Pattern: ${val[2]}</strong><br/>
+                        <strong>Support (Coverage):</strong> ${val[0].toFixed(2)}%<br/>
+                        <strong>Subgroup Quality:</strong> ${val[1].toFixed(4)}
+                    </div>`;
+                }
+            },
+            xAxis: {
+                type: 'value',
+                name: 'Support Percentage (%)',
+                nameLocation: 'middle',
+                nameGap: 25,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6', formatter: '{value}%' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            yAxis: {
+                type: 'value',
+                name: 'Subgroup Quality',
+                nameLocation: 'middle',
+                nameGap: 30,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            grid: { left: '12%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
+            series: [
+                {
+                    name: 'Pareto Frontier',
+                    type: 'line',
+                    data: pareto.map(p => [p.support_percentage, p.quality, p.descriptor]),
+                    lineStyle: { color: '#ef4444', width: 2 },
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    itemStyle: { color: '#3b82f6', borderColor: '#60a5fa', borderWidth: 1.5 },
+                    smooth: true
+                }
+            ]
+        };
+
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * Feature Importance Visualizer
+ * Horizontal bar chart for statistical prevalence of attributes in top nodes
+ */
+class FeatureImportance extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.feature_importance && Object.keys(latest.global_metrics.feature_importance).length > 0;
+    }
+
+    showEmptyState() {
+        if (this.chart) {
+            this.chart.dispose();
+            this.chart = null;
+        }
+        this.container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full w-full p-6 text-center select-none" style="min-height: 250px;">
+                <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                    No visualization data has been transmitted for this metric in the current execution cycle.
+                </p>
+            </div>
+        `;
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const importance = latest.global_metrics.feature_importance || {};
+
+        // Sort items by importance ascending for vertical rendering bottom-to-top
+        const sortedItems = Object.entries(importance).sort((a, b) => a[1] - b[1]);
+        const yData = sortedItems.map(item => item[0]);
+        const xData = sortedItems.map(item => item[1]);
+
+        const option = {
+            title: {
+                text: 'Feature Importance (Tree Frequency)',
+                left: 'center',
+                top: 10,
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
+            },
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const p = params[0];
+                    return `<div style="font-size: 11px; padding: 4px;">
+                        <strong>Attribute:</strong> ${p.name}<br/>
+                        <strong>Prevalence Ratio:</strong> ${(p.value * 100).toFixed(1)}%
+                    </div>`;
+                }
+            },
+            xAxis: {
+                type: 'value',
+                name: 'Prevalence in Top 5% Nodes',
+                nameLocation: 'middle',
+                nameGap: 25,
+                min: 0,
+                max: 1.0,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6', formatter: (val) => `${(val * 100).toFixed(0)}%` },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            yAxis: {
+                type: 'category',
+                data: yData,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6', fontSize: 10 }
+            },
+            grid: { left: '20%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
+            series: [
+                {
+                    name: 'Prevalence',
+                    type: 'bar',
+                    data: xData,
+                    itemStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                            { offset: 0, color: '#1e3a8a' },
+                            { offset: 1, color: '#3b82f6' }
+                        ]),
+                        borderRadius: [0, 4, 4, 0]
+                    }
+                }
+            ]
+        };
+
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * Depth Histogram Visualizer
+ * Vertical bar chart for tree layer node distribution
+ */
+class DepthHistogram extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.depth_histogram && latest.global_metrics.depth_histogram.length > 0;
+    }
+
+    showEmptyState() {
+        if (this.chart) {
+            this.chart.dispose();
+            this.chart = null;
+        }
+        this.container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full w-full p-6 text-center select-none" style="min-height: 250px;">
+                <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                    No visualization data has been transmitted for this metric in the current execution cycle.
+                </p>
+            </div>
+        `;
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const depthHist = latest.global_metrics.depth_histogram || [];
+
+        const xData = depthHist.map((_, i) => `Depth ${i}`);
+
+        const option = {
+            title: {
+                text: 'Tree Topology & Search Depth Distribution',
+                left: 'center',
+                top: 10,
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
+            },
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                textStyle: { color: '#e4e4e7' }
+            },
+            xAxis: {
+                type: 'category',
+                data: xData,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' }
+            },
+            yAxis: {
+                type: 'value',
+                name: 'Node Count',
+                nameLocation: 'middle',
+                nameGap: 35,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            grid: { left: '12%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
+            series: [
+                {
+                    name: 'Nodes',
+                    type: 'bar',
+                    data: depthHist,
+                    itemStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#10b981' },
+                            { offset: 1, color: '#047857' }
+                        ]),
+                        borderRadius: [4, 4, 0, 0]
+                    }
+                }
+            ]
+        };
+
+        this.chart.setOption(option);
     }
 }
 
@@ -550,6 +1059,14 @@ class BubbleChartViz extends BaseVisualizer {
  * Contrast KDE Chart - Kernel Density Estimation
  */
 class ContrastKDEChart extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latestSnapshot = snapshots[snapshots.length - 1];
+        const selectedPattern = this.data.selectedPattern || latestSnapshot.discovered_patterns?.[0];
+        return !!selectedPattern;
+    }
+
     render() {
         const snapshots = this.data.snapshots || [];
         if (snapshots.length === 0) return;
@@ -601,7 +1118,7 @@ class ContrastKDEChart extends BaseVisualizer {
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
-            grid: { left: '8%', right: '5%', bottom: '20%', top: '15%', containLabel: true },
+            grid: { left: '12%', right: '5%', bottom: '20%', top: '15%', containLabel: true },
             series: [
                 {
                     name: 'Base Class 0',
@@ -668,7 +1185,16 @@ class MCTSDiagnosticsPanel {
     render() {
         const snapshots = this.data.snapshots || [];
         if (snapshots.length === 0) {
-            this.container.innerHTML = '<div class="col-span-3 text-center text-zinc-500 py-6">Waiting for MCTS search snapshots...</div>';
+            this.container.innerHTML = `
+                <div class="col-span-4 flex flex-col items-center justify-center p-6 text-center select-none w-full" style="min-height: 200px;">
+                    <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                        No visualization data has been transmitted for this metric in the current execution cycle.
+                    </p>
+                </div>
+            `;
             return;
         }
         
@@ -679,11 +1205,29 @@ class MCTSDiagnosticsPanel {
         const total = metrics.search_space || 50000;
         const progress = ((explored / total) * 100).toFixed(2);
         const stability = metrics.stability !== undefined ? metrics.stability : 0;
-        const rate = metrics.explored_rate || 0;
+        const rate = (metrics.explored_rate || 0).toFixed(1);
         const rolloutSuccess = ((metrics.rollout_success_rate || 0) * 100).toFixed(1);
         
-        const stabilityColor = stability > 15 ? 'text-yellow-500' : 'text-green-500';
+        const stabilityColor = stability > 1000 ? 'text-red-500' : (stability > 200 ? 'text-yellow-500' : 'text-green-500');
+        const pathDiversity = metrics.path_diversity !== undefined ? metrics.path_diversity : 0.0;
         
+        // Search space diagnostics
+        const ssDiag = metrics.search_space_diagnostics || {
+            dead_end_ratio: 0.0,
+            total_nodes: 0,
+            dead_end_nodes: 0,
+            min_support_active: 10
+        };
+        const deadEndPct = ssDiag.dead_end_ratio * 100;
+        const searchSpaceHealth = (100 - deadEndPct).toFixed(1);
+        const healthColor = searchSpaceHealth < 25 ? 'text-red-500' : (searchSpaceHealth < 50 ? 'text-yellow-500' : 'text-green-500');
+        
+        const minSupActive = ssDiag.min_support_active;
+        const defaultMinSupport = 10;
+        const isRelaxed = minSupActive < defaultMinSupport;
+        const supportColor = isRelaxed ? 'text-amber-500' : 'text-green-500';
+        const supportStatusText = isRelaxed ? 'Relaxed' : 'Standard';
+
         this.container.innerHTML = `
             <div class="bg-zinc-950 p-4 rounded-lg border border-zinc-800 flex flex-col justify-between">
                 <div>
@@ -696,6 +1240,26 @@ class MCTSDiagnosticsPanel {
                 <span class="text-[10px] text-zinc-500 mt-2 block">${explored.toLocaleString()} / ${total.toLocaleString()} nodes</span>
             </div>
             
+            <div class="bg-zinc-950 p-4 rounded-lg border border-zinc-800 flex flex-col justify-between">
+                <div>
+                    <span class="text-xs text-zinc-500 uppercase tracking-wider block">Search Space Health</span>
+                    <span class="text-2xl font-bold ${healthColor} font-mono mt-1 block">${searchSpaceHealth}%</span>
+                </div>
+                <p class="text-[10px] text-zinc-400 mt-2 leading-relaxed">
+                    Ratio of active, non dead-end nodes. Low health indicates search tree is fully explored.
+                </p>
+            </div>
+
+            <div class="bg-zinc-950 p-4 rounded-lg border border-zinc-800 flex flex-col justify-between">
+                <div>
+                    <span class="text-xs text-zinc-500 uppercase tracking-wider block">Active Min Support</span>
+                    <span class="text-2xl font-bold ${supportColor} font-mono mt-1 block">${minSupActive}</span>
+                </div>
+                <div class="flex justify-between items-center text-[10px] text-zinc-500 mt-2">
+                    <span>Status: ${supportStatusText}</span>
+                </div>
+            </div>
+
             <div class="bg-zinc-950 p-4 rounded-lg border border-zinc-800 flex flex-col justify-between">
                 <div>
                     <span class="text-xs text-zinc-500 uppercase tracking-wider block">Priority Set Stability</span>
@@ -715,6 +1279,16 @@ class MCTSDiagnosticsPanel {
                     <span>Speed: +${rate} nodes/s</span>
                     <span>Status: Active</span>
                 </div>
+            </div>
+
+            <div class="bg-zinc-950 p-4 rounded-lg border border-zinc-800 flex flex-col justify-between">
+                <div>
+                    <span class="text-xs text-zinc-500 uppercase tracking-wider block">Path Diversity</span>
+                    <span class="text-2xl font-bold text-blue-400 font-mono mt-1 block">${pathDiversity.toFixed(4)}</span>
+                </div>
+                <p class="text-[10px] text-zinc-400 mt-2 leading-relaxed">
+                    Shannon Entropy of branch selection. Higher implies broader exploration.
+                </p>
             </div>
         `;
     }
@@ -740,11 +1314,42 @@ class PatternDetailsPanel {
             this.kdeChartInstance.resize();
         }
     }
+
+    async injectBudget(patternId, seconds) {
+        try {
+            const res = await fetch('/api/control/inject', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    pattern_id: patternId,
+                    seconds: seconds
+                })
+            });
+            const result = await res.json();
+            window.app.addActivityLog(`Injected +${seconds}s budget on ${patternId}`);
+            
+            // Switch run status to running immediately on the UI side
+            window.app.updateStatusIndicator(true, 'running');
+            
+            await window.app.fetchCurrentConfig();
+        } catch (e) {
+            console.error('Failed to inject budget:', e);
+        }
+    }
     
     render() {
         const snapshots = this.data.snapshots || [];
         if (snapshots.length === 0) {
-            this.container.innerHTML = '<div class="text-center text-zinc-500 py-12">No snapshots loaded yet. Start the audit to see patterns.</div>';
+            this.container.innerHTML = `
+                <div class="flex flex-col items-center justify-center p-6 text-center select-none w-full" style="min-height: 300px;">
+                    <svg class="w-12 h-12 text-zinc-700 mb-3 opacity-60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p class="text-xs text-zinc-400 max-w-xs font-medium leading-relaxed">
+                        No visualization data has been transmitted for this metric in the current execution cycle.
+                    </p>
+                </div>
+            `;
             return;
         }
         
@@ -763,6 +1368,8 @@ class PatternDetailsPanel {
         if (window.app) {
             window.app.selectedPattern = selectedPattern;
         }
+
+        const isFocused = window.app?.currentWeights?.[selectedPattern.id] !== undefined;
         
         this.container.innerHTML = `
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full mt-4" style="min-height: 500px;">
@@ -798,6 +1405,26 @@ class PatternDetailsPanel {
                 </div>
                 
                 <div class="lg:col-span-2 flex flex-col gap-6">
+                    <!-- Title and guiding controls -->
+                    <div class="bg-zinc-900 border border-zinc-800 p-4 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <span class="text-xs text-zinc-500 uppercase tracking-wider block">Selected Slice ID</span>
+                            <span class="text-lg font-bold text-zinc-150 font-mono block">${selectedPattern.id}</span>
+                            <span class="text-xs text-zinc-400 mt-1 block">Quality score φ: <strong class="text-blue-400 font-mono">${selectedPattern.quality_score.toFixed(4)}</strong></span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button id="btn-focus-slice" class="px-3 py-1.5 rounded text-xs font-semibold border transition-colors flex items-center gap-1.5 ${isFocused ? 'bg-amber-600/20 text-amber-300 border-amber-500 hover:bg-amber-600/30' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}">
+                                Focus
+                            </button>
+                            <button id="btn-inject-10s" class="px-3 py-1.5 bg-blue-900 hover:bg-blue-800 text-blue-100 rounded text-xs font-semibold transition-colors">
+                                Inject +10s
+                            </button>
+                            <button id="btn-inject-30s" class="px-3 py-1.5 bg-emerald-950 hover:bg-emerald-800 text-emerald-100 rounded text-xs font-semibold transition-colors">
+                                Inject +30s
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         <div class="bg-zinc-900 border border-zinc-800 p-3 rounded-lg">
                             <span class="text-[10px] text-zinc-500 uppercase tracking-wider block">Slice Support</span>
@@ -885,6 +1512,38 @@ class PatternDetailsPanel {
                 this.render();
             });
         });
+
+        // Bind Focus and Inject buttons
+        const focusBtn = this.container.querySelector('#btn-focus-slice');
+        if (focusBtn) {
+            focusBtn.addEventListener('click', async () => {
+                try {
+                    const res = await fetch('/api/control/focus', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            pattern_id: selectedPattern.id,
+                            focused: !isFocused
+                        })
+                    });
+                    const result = await res.json();
+                    window.app.addActivityLog(`${isFocused ? 'Removed focus from' : 'Focused on'} ${selectedPattern.id}`);
+                    await window.app.fetchCurrentConfig();
+                } catch (e) {
+                    console.error('Failed to focus pattern:', e);
+                }
+            });
+        }
+        
+        const inject10Btn = this.container.querySelector('#btn-inject-10s');
+        if (inject10Btn) {
+            inject10Btn.addEventListener('click', () => this.injectBudget(selectedPattern.id, 10.0));
+        }
+        
+        const inject30Btn = this.container.querySelector('#btn-inject-30s');
+        if (inject30Btn) {
+            inject30Btn.addEventListener('click', () => this.injectBudget(selectedPattern.id, 30.0));
+        }
         
         setTimeout(() => this.renderKDEChart(selectedPattern, latest), 0);
     }
@@ -1094,10 +1753,17 @@ class AuditLensApp {
         this.snapshots = [];
         this.currentExploreIteration = null;
         this.playInterval = null;
-
+        this.budgetConsumed = 0.0;
+        this.remainingBudget = 0.0;
+        this.currentWeights = {};
+        this.interactedFields = new Set();
+ 
         this.initializeVisualizers();
         this.initializeEventListeners();
         this.connectWebSocket();
+        this.fetchCurrentConfig();
+        this.fetchHistory();
+        this.setupCardResizeSnapping();
     }
 
     initializeVisualizers() {
@@ -1113,13 +1779,19 @@ class AuditLensApp {
         this.registry.register('contrast-kde', ContrastKDEChart);
         this.registry.register('tree-diagnostics', MCTSDiagnosticsPanel);
         this.registry.register('pattern-details', PatternDetailsPanel);
+        this.registry.register('pareto-frontier', ParetoFrontier);
+        this.registry.register('feature-importance', FeatureImportance);
+        this.registry.register('depth-histogram', DepthHistogram);
 
         const chartConfigs = [
             { id: 'quality-scatter', elementId: 'chart-metrics' },
             { id: 'error-distribution', elementId: 'chart-quality' },
             { id: 'search-metrics-kpi', elementId: 'kpi-section' },
             { id: 'tree-diagnostics', elementId: 'tree-diagnostics-container' },
-            { id: 'pattern-details', elementId: 'pattern-details-container' }
+            { id: 'pattern-details', elementId: 'pattern-details-container' },
+            { id: 'pareto-frontier', elementId: 'chart-pareto' },
+            { id: 'feature-importance', elementId: 'chart-feature-importance' },
+            { id: 'depth-histogram', elementId: 'chart-depth-histogram' }
         ];
 
         chartConfigs.forEach(config => {
@@ -1159,6 +1831,18 @@ class AuditLensApp {
         console.log('Config form found:', configForm);
         if (configForm) {
             configForm.addEventListener('submit', (e) => this.handleConfigSubmit(e));
+            
+            // Track user interaction with config fields
+            configForm.querySelectorAll('input, textarea, select').forEach(input => {
+                const name = input.getAttribute('name');
+                if (name) {
+                    const markInteracted = () => {
+                        this.interactedFields.add(name);
+                    };
+                    input.addEventListener('change', markInteracted);
+                    input.addEventListener('input', markInteracted);
+                }
+            });
         } else {
             console.error('Config form not found');
         }
@@ -1169,12 +1853,66 @@ class AuditLensApp {
             const el = document.getElementById(id);
             const valEl = document.getElementById(id + '-val');
             if (el && valEl) {
-                el.addEventListener('input', (e) => {
+                const updateValue = (e) => {
                     const val = parseFloat(e.target.value);
                     valEl.textContent = (id === 'max-gap') ? val : val.toFixed(2);
-                });
+                    const name = el.getAttribute('name');
+                    if (name) {
+                        this.interactedFields.add(name);
+                    }
+                };
+                el.addEventListener('input', updateValue);
+                el.addEventListener('change', updateValue);
             }
         });
+
+        // Collapsible Sidebar Toggle Logic
+        const toggleSidebar = () => {
+            const layout = document.querySelector('.grid-layout');
+            const expandBtn = document.getElementById('btn-expand-sidebar');
+            if (layout) {
+                layout.classList.toggle('sidebar-collapsed');
+                const isCollapsed = layout.classList.contains('sidebar-collapsed');
+                
+                if (expandBtn) {
+                    if (isCollapsed) {
+                        expandBtn.classList.remove('hidden');
+                    } else {
+                        expandBtn.classList.add('hidden');
+                    }
+                }
+                
+                // Trigger charts resize after CSS grid columns transition is done (300ms transition)
+                setTimeout(() => {
+                    this.visualizers.forEach(v => {
+                        if (v && v.chart && typeof v.chart.resize === 'function') {
+                            v.chart.resize();
+                        }
+                        if (v && typeof v.resize === 'function') {
+                            v.resize();
+                        }
+                    });
+                }, 310);
+            }
+        };
+
+        const settingsBtn = document.getElementById('btn-settings');
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                toggleSidebar();
+            });
+        }
+
+        const toggleSidebarBtn = document.getElementById('btn-toggle-sidebar');
+        if (toggleSidebarBtn) {
+            toggleSidebarBtn.addEventListener('click', toggleSidebar);
+        }
+
+        const expandSidebarBtn = document.getElementById('btn-expand-sidebar');
+        if (expandSidebarBtn) {
+            expandSidebarBtn.addEventListener('click', toggleSidebar);
+        }
 
         // Initialize Evolution Timeline events
         this.initializeTimelineEvents();
@@ -1188,6 +1926,13 @@ class AuditLensApp {
             });
         } else {
             console.error('Add chart button not found');
+        }
+
+        const exportCsvBtn = document.getElementById('btn-export-csv');
+        if (exportCsvBtn) {
+            exportCsvBtn.addEventListener('click', () => {
+                this.exportEmpiricalDataCSV();
+            });
         }
 
         // Tabs
@@ -1228,44 +1973,265 @@ class AuditLensApp {
         if (btnFilter) {
             btnFilter.addEventListener('click', () => this.fetchLogs());
         }
+
+        // Bind close buttons of existing cards
+        document.querySelectorAll('.btn-close-chart').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const container = e.target.closest('.chart-container');
+                if (container) {
+                    this.removeChart(container);
+                }
+            });
+        });
+
+        // Make existing cards draggable
+        document.querySelectorAll('.chart-container').forEach(card => {
+            this.makeCardDraggable(card);
+        });
     }
 
-    async handleConfigSubmit(e) {
-        e.preventDefault();
-        const formData = new FormData(document.getElementById('config-form'));
-        const useMockCheckbox = document.getElementById('use-mock');
-        
-        let weights = {};
-        try {
-            const weightsRaw = formData.get('weights_input');
-            if (weightsRaw && weightsRaw.trim() !== '') {
-                weights = JSON.parse(weightsRaw);
-            }
-        } catch (e) {
-            console.error("Invalid JSON for weights");
-            this.addActivityLog('Invalid JSON in weights');
+    exportEmpiricalDataCSV() {
+        if (!this.snapshots || this.snapshots.length === 0) {
+            alert("No telemetry history available to export.");
             return;
         }
 
-        const config = {
-            budgets: { 'search': parseFloat(formData.get('search_budget')) || 100 },
-            use_mock: useMockCheckbox ? useMockCheckbox.checked : false,
-            weights: weights,
-            subgroups_to_explore: formData.get('subgroups_explore')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0),
-            subgroups_to_ignore: formData.get('subgroups_ignore')
-                .split(',')
-                .map(s => s.trim())
-                .filter(s => s.length > 0),
-            max_gap: parseInt(formData.get('max_gap')) || 5,
-            gamma: parseFloat(formData.get('gamma')) || 0.5,
-            uct_factor: parseFloat(formData.get('uct_factor')) || 1.2,
-            jaccard_threshold: parseFloat(formData.get('jaccard_threshold')) || 0.9,
-            min_support: parseInt(formData.get('min_support')) || 10,
-            min_count_class: parseInt(formData.get('min_count_class')) || 5
+        const headers = [
+            "Iteration",
+            "Timestamp",
+            "Total Elapsed Time (s)",
+            "Top Quality",
+            "Explored Nodes",
+            "Search Space",
+            "Stability",
+            "Rollout Success Rate (%)",
+            "Max Depth",
+            "Path Diversity (Entropy)",
+            "UCT Factor",
+            "Support Penalty (Gamma)",
+            "Max Gap"
+        ];
+
+        const rows = this.snapshots.map(snapshot => {
+            const m = snapshot.global_metrics || {};
+            return [
+                snapshot.iteration || 0,
+                snapshot.timestamp || "",
+                m.total_elapsed_time !== undefined ? m.total_elapsed_time : 0.0,
+                m.top_quality !== undefined ? m.top_quality : 0.0,
+                m.explored_nodes !== undefined ? m.explored_nodes : 0,
+                m.search_space !== undefined ? m.search_space : 50000,
+                m.stability !== undefined ? m.stability : 0,
+                m.rollout_success_rate !== undefined ? (m.rollout_success_rate * 100).toFixed(2) : 100.0,
+                m.max_depth !== undefined ? m.max_depth : 0,
+                m.path_diversity !== undefined ? m.path_diversity : 0.0,
+                m.uct_factor !== undefined ? m.uct_factor : 1.2,
+                m.support_penalty !== undefined ? m.support_penalty : 0.5,
+                m.max_gap !== undefined ? m.max_gap : 5
+            ];
+        });
+
+        const csvContent = [
+            headers.join(","),
+            ...rows.map(r => r.map(val => {
+                if (typeof val === 'string' && val.includes(',')) {
+                    return `"${val.replace(/"/g, '""')}"`;
+                }
+                return val;
+            }).join(","))
+        ].join("\n");
+
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `mcts_empirical_telemetry_${Date.now()}.csv`);
+        link.style.visibility = "hidden";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    async fetchCurrentConfig() {
+        try {
+            const res = await fetch('/api/config/current');
+            const data = await res.json();
+            this.budgetConsumed = data.budget_consumed || 0.0;
+            this.remainingBudget = data.remaining_budget || 0.0;
+            this.currentStatus = data.status || 'idle';
+            this.currentWeights = data.weights || {};
+            
+            // Update sidebar fields to match config (disabled for neutral initialization)
+            // this.populateConfigFields(data);
+            
+            // Trigger KPI update
+            this.updateMetrics();
+        } catch (e) {
+            console.error('Failed to fetch current config:', e);
+        }
+    }
+
+    populateConfigFields(data) {
+        if (!data) return;
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.value = val;
         };
+        const setHtml = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        
+        if (data.budgets && data.budgets.search !== undefined) {
+            setVal('search-budget', data.budgets.search);
+        }
+        
+        const useMockCheckbox = document.getElementById('use-mock');
+        if (useMockCheckbox && data.use_mock !== undefined) {
+            useMockCheckbox.checked = data.use_mock;
+        }
+        
+        if (data.explore) {
+            setVal('subgroups-explore', data.explore.join(', '));
+        }
+        if (data.ignore) {
+            setVal('subgroups-ignore', data.ignore.join(', '));
+        }
+        if (data.weights && Object.keys(data.weights).length > 0) {
+            setVal('weights-input', JSON.stringify(data.weights));
+        } else {
+            setVal('weights-input', '');
+        }
+        
+        if (data.max_gap !== undefined) {
+            setVal('max-gap', data.max_gap);
+            setHtml('max-gap-val', data.max_gap);
+        }
+        if (data.gamma !== undefined) {
+            setVal('gamma', data.gamma);
+            setHtml('gamma-val', data.gamma.toFixed(2));
+        }
+        if (data.min_support !== undefined) {
+            setVal('min-support', data.min_support);
+        }
+        if (data.min_count_class !== undefined) {
+            setVal('min-count-class', data.min_count_class);
+        }
+        if (data.uct_factor !== undefined) {
+            setVal('uct-factor', data.uct_factor);
+            setHtml('uct-factor-val', data.uct_factor.toFixed(2));
+        }
+        if (data.jaccard_threshold !== undefined) {
+            setVal('jaccard-threshold', data.jaccard_threshold);
+            setHtml('jaccard-threshold-val', data.jaccard_threshold.toFixed(2));
+        }
+    }
+
+    async handleConfigSubmit(e) {
+        if (e) e.preventDefault();
+        const configForm = document.getElementById('config-form');
+        if (!configForm) return;
+        const formData = new FormData(configForm);
+        const useMockCheckbox = document.getElementById('use-mock');
+        
+        const config = {};
+        
+        const shouldSend = (name, isSlider = false) => {
+            const value = formData.get(name);
+            if (isSlider) {
+                return this.interactedFields && this.interactedFields.has(name) && value !== null && value !== undefined && value.trim() !== '';
+            }
+            return value !== null && value !== undefined && value.trim() !== '';
+        };
+
+        // Budgets
+        if (shouldSend('search_budget')) {
+            config.budgets = { 'search': parseFloat(formData.get('search_budget')) };
+        } else {
+            config.budgets = null;
+        }
+
+        // Use mock
+        if (this.interactedFields && this.interactedFields.has('use_mock') && useMockCheckbox) {
+            config.use_mock = useMockCheckbox.checked;
+        } else {
+            config.use_mock = null;
+        }
+
+        // Subgroups explore
+        if (shouldSend('subgroups_explore')) {
+            config.subgroups_to_explore = formData.get('subgroups_explore')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+        } else {
+            config.subgroups_to_explore = null;
+        }
+
+        // Subgroups ignore
+        if (shouldSend('subgroups_ignore')) {
+            config.subgroups_to_ignore = formData.get('subgroups_ignore')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+        } else {
+            config.subgroups_to_ignore = null;
+        }
+
+        // Weights
+        if (shouldSend('weights_input')) {
+            try {
+                config.weights = JSON.parse(formData.get('weights_input'));
+            } catch (err) {
+                console.error("Invalid JSON for weights");
+                this.addActivityLog('Invalid JSON in weights');
+                return;
+            }
+        } else {
+            config.weights = null;
+        }
+
+        // Max Gap
+        if (shouldSend('max_gap', true)) {
+            config.max_gap = parseInt(formData.get('max_gap'));
+        } else {
+            config.max_gap = null;
+        }
+
+        // Gamma
+        if (shouldSend('gamma', true)) {
+            config.gamma = parseFloat(formData.get('gamma'));
+        } else {
+            config.gamma = null;
+        }
+
+        // Min Support
+        if (shouldSend('min_support')) {
+            config.min_support = parseInt(formData.get('min_support'));
+        } else {
+            config.min_support = null;
+        }
+
+        // Min Count Class
+        if (shouldSend('min_count_class')) {
+            config.min_count_class = parseInt(formData.get('min_count_class'));
+        } else {
+            config.min_count_class = null;
+        }
+
+        // UCT Factor
+        if (shouldSend('uct_factor', true)) {
+            config.uct_factor = parseFloat(formData.get('uct_factor'));
+        } else {
+            config.uct_factor = null;
+        }
+
+        // Jaccard Threshold
+        if (shouldSend('jaccard_threshold', true)) {
+            config.jaccard_threshold = parseFloat(formData.get('jaccard_threshold'));
+        } else {
+            config.jaccard_threshold = null;
+        }
 
         try {
             const response = await fetch('/api/config', {
@@ -1290,16 +2256,20 @@ class AuditLensApp {
 
         // Create a modal or dropdown to select visualization type
         const visualizationTypes = [
-            { id: 'quality-scatter', name: 'Quality vs Support Scatter Plot', icon: '📊' },
-            { id: 'error-distribution', name: 'Error Distribution Chart', icon: '📈' },
-            { id: 'convergence-chart', name: 'Quality Convergence (Step Chart)', icon: '🎯' },
-            { id: 'bubble-chart', name: 'Bubble Chart (Quality vs Support)', icon: '🫧' },
-            { id: 'contrast-kde', name: 'Contrast KDE Distribution', icon: '📉' },
-            { id: 'pattern-quality', name: 'Pattern Quality Panel', icon: '⭐' },
-            { id: 'control-panel', name: 'Control Panel (Sliders)', icon: '🎚️' },
-            { id: 'search-metrics-kpi', name: 'Search Metrics KPI', icon: '📋' },
-            { id: 'metrics-evolution', name: 'Metrics Evolution (Timeline)', icon: '📊' },
-            { id: 'class-balance-pie', name: 'Class Balance Pie Chart', icon: '🥧' }
+            { id: 'quality-scatter', name: 'Quality vs Support Scatter Plot', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-500"></span>' },
+            { id: 'error-distribution', name: 'Error Distribution Chart', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span>' },
+            { id: 'convergence-chart', name: 'Quality Convergence (Step Chart)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>' },
+            { id: 'bubble-chart', name: 'Bubble Chart (Quality vs Support)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-teal-500"></span>' },
+            { id: 'contrast-kde', name: 'Contrast KDE Distribution', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-pink-500"></span>' },
+            { id: 'slices-heatmap', name: 'Slices Heatmap', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-orange-500"></span>' },
+            { id: 'search-metrics-kpi', name: 'Search Metrics KPI', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-indigo-500"></span>' },
+            { id: 'metrics-evolution', name: 'Metrics Evolution (Timeline)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-cyan-500"></span>' },
+            { id: 'class-balance-pie', name: 'Class Balance Pie Chart', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-rose-500"></span>' },
+            { id: 'tree-diagnostics', name: 'MCTS Tree Diagnostics', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-violet-500"></span>' },
+            { id: 'pattern-details', name: 'Pattern Details Panel', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-fuchsia-500"></span>' },
+            { id: 'pareto-frontier', name: 'Pareto Frontier (Quality vs. Support)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>' },
+            { id: 'feature-importance', name: 'Feature Importance (Tree Frequency)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500"></span>' },
+            { id: 'depth-histogram', name: 'Tree Topology & Search Depth', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-purple-500"></span>' }
         ];
 
         // Create modal overlay
@@ -1313,7 +2283,7 @@ class AuditLensApp {
                         <button class="w-full text-left p-3 bg-slate-700 hover:bg-slate-600 rounded-md transition-colors border border-slate-600"
                                 data-type="${type.id}">
                             <div class="flex items-center gap-3">
-                                <span class="text-xl">${type.icon}</span>
+                                <span class="flex-shrink-0 flex items-center justify-center">${type.icon}</span>
                                 <div>
                                     <div class="text-slate-200 font-medium text-sm">${type.name}</div>
                                     <div class="text-slate-400 text-xs">Add a new ${type.name.toLowerCase()}</div>
@@ -1348,17 +2318,35 @@ class AuditLensApp {
         // Generate unique ID for the new visualization
         const uniqueId = `${type}-${Date.now()}`;
         
+        const visualizationTypes = [
+            { id: 'quality-scatter', name: 'Quality vs Support Scatter Plot', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-500"></span>' },
+            { id: 'error-distribution', name: 'Error Distribution Chart', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span>' },
+            { id: 'convergence-chart', name: 'Quality Convergence (Step Chart)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span>' },
+            { id: 'bubble-chart', name: 'Bubble Chart (Quality vs Support)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-teal-500"></span>' },
+            { id: 'contrast-kde', name: 'Contrast KDE Distribution', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-pink-500"></span>' },
+            { id: 'slices-heatmap', name: 'Slices Heatmap', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-orange-500"></span>' },
+            { id: 'search-metrics-kpi', name: 'Search Metrics KPI', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-indigo-500"></span>' },
+            { id: 'metrics-evolution', name: 'Metrics Evolution (Timeline)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-cyan-500"></span>' },
+            { id: 'class-balance-pie', name: 'Class Balance Pie Chart', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-rose-500"></span>' },
+            { id: 'tree-diagnostics', name: 'MCTS Tree Diagnostics', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-violet-500"></span>' },
+            { id: 'pattern-details', name: 'Pattern Details Panel', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-fuchsia-500"></span>' },
+            { id: 'pareto-frontier', name: 'Pareto Frontier (Quality vs. Support)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>' },
+            { id: 'feature-importance', name: 'Feature Importance (Tree Frequency)', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500"></span>' },
+            { id: 'depth-histogram', name: 'Tree Topology & Search Depth', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-purple-500"></span>' }
+        ];
+
+        const typeInfo = visualizationTypes.find(t => t.id === type) || { name: 'New Visualization', icon: '<span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-500"></span>' };
+
         // Create container for the new visualization
         const container = document.createElement('div');
-        container.className = 'chart-container rounded-lg overflow-auto';
+        container.className = 'chart-container rounded-lg overflow-hidden';
         container.innerHTML = `
             <div class="chart-header">
                 <div class="chart-title">
-                    <span class="chart-icon">📊</span>
-                    New Visualization
+                    <span class="chart-icon">${typeInfo.icon}</span>
+                    ${typeInfo.name}
                 </div>
-                <button class="text-slate-400 hover:text-slate-200 transition-colors"
-                        onclick="this.closest('.chart-container').remove()">
+                <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                     </svg>
@@ -1367,7 +2355,7 @@ class AuditLensApp {
             <div id="${uniqueId}" class="chart-content"></div>
         `;
 
-        const chartsContainer = document.getElementById('charts-container') || document.querySelector('.main-content');
+        const chartsContainer = document.getElementById('global-view') || document.getElementById('charts-container') || document.querySelector('.main-content');
         if (chartsContainer) {
             chartsContainer.appendChild(container);
             
@@ -1376,32 +2364,212 @@ class AuditLensApp {
                 const visualizer = this.registry.create(type, element);
                 this.visualizers.set(uniqueId, visualizer);
                 
-                if (this.metrics.length > 0) {
-                    if (type === 'search-metrics-kpi') {
-                        const latestSlice = this.metrics[this.metrics.length - 1];
-                        const latestMetrics = latestSlice?.search_metrics;
-                        if (latestMetrics) {
-                            latestMetrics._sliceCount = this.metrics.length;
-                            latestMetrics.pattern_descriptor = latestSlice.pattern_descriptor;
-                            latestMetrics.top10_avg_quality = latestSlice.top10_avg_quality;
-                            visualizer.update(latestMetrics);
-                        }
-                    } else {
-                        visualizer.update(this.metrics);
-                    }
+                // Make the card draggable
+                this.makeCardDraggable(container);
+                
+                // Bind close button
+                const closeBtn = container.querySelector('.btn-close-chart');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => {
+                        this.removeChart(container);
+                    });
                 }
                 
-                this.addActivityLog(`Added new ${type} visualization`);
+                // Initial update from current session data
+                this.updateMetrics();
+                
+                this.addActivityLog(`Added new ${typeInfo.name} visualization`);
             }
         }
     }
 
-    startAudit() {
+    async fetchHistory() {
+        try {
+            const res = await fetch('/api/snapshots');
+            const snapshots = await res.json();
+            if (Array.isArray(snapshots) && snapshots.length > 0) {
+                this.snapshots = snapshots;
+                // Convert snapshots to metrics for compatibility
+                this.metrics = snapshots.map(snapshot => ({
+                    pattern_descriptor: snapshot.id,
+                    quality_score_phi: snapshot.global_metrics?.top_quality || 0.5,
+                    support_percentage: 50,
+                    error_class_0: 0.2,
+                    error_class_1: 0.2,
+                    support_count: 100,
+                    mean_error_mu: snapshot.global_metrics?.avg_error || 0.25,
+                    std_error_sigma: 0.05,
+                    soft_error: 0.1,
+                    p_value_bh: 0.01,
+                    delta_g: 0.05,
+                    top10_avg_quality: snapshot.global_metrics?.top_quality || 0.5,
+                    search_metrics: { 
+                        explored_patterns: snapshot.global_metrics?.explored_nodes || snapshot.iteration || 0, 
+                        search_space_coverage: snapshot.global_metrics?.tree_progress || 0.5, 
+                        filtered_similarity: 0.7 
+                    }
+                }));
+                
+                this.currentExploreIteration = this.snapshots.length;
+                this.updateTimelineExplorer();
+                this.updateMetrics();
+                this.addActivityLog(`Loaded ${this.snapshots.length} historical snapshots`);
+            }
+        } catch (e) {
+            console.error('Failed to fetch historical snapshots:', e);
+        }
+    }
+
+    removeChart(container) {
+        // Find if this container has a visualizer associated with it
+        for (const [key, visualizer] of this.visualizers.entries()) {
+            if (visualizer && (visualizer.container === container || container.contains(visualizer.container))) {
+                if (typeof visualizer.dispose === 'function') {
+                    try {
+                        visualizer.dispose();
+                    } catch (e) {
+                        console.error('Error disposing visualizer:', e);
+                    }
+                }
+                this.visualizers.delete(key);
+                break;
+            }
+        }
+        container.remove();
+        this.addActivityLog('Chart removed from layout');
+        
+        // Trigger ECharts resize on remaining charts
+        setTimeout(() => {
+            this.visualizers.forEach(v => {
+                if (v && v.chart && typeof v.chart.resize === 'function') {
+                    v.chart.resize();
+                }
+            });
+        }, 50);
+    }
+
+    makeCardDraggable(card) {
+        card.removeAttribute('draggable');
+        const header = card.querySelector('.chart-header');
+        if (!header) return;
+
+        header.setAttribute('draggable', 'true');
+        
+        header.addEventListener('dragstart', (e) => {
+            const isButtonClick = e.target.closest('button') || e.target.closest('a');
+            if (isButtonClick) {
+                e.preventDefault();
+                return false;
+            }
+            
+            window.draggedCard = card;
+            card.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        });
+        
+        header.addEventListener('dragend', () => {
+            card.classList.remove('dragging');
+            document.querySelectorAll('.chart-container').forEach(c => {
+                c.classList.remove('drag-over');
+            });
+            window.draggedCard = null;
+        });
+        
+        card.addEventListener('dragenter', (e) => {
+            if (window.draggedCard && window.draggedCard !== card) {
+                card.classList.add('drag-over');
+                
+                // Live Swap Collision Flow
+                const now = Date.now();
+                if (this.lastDragSwapTime && (now - this.lastDragSwapTime < 350)) {
+                    return;
+                }
+                
+                const parent = card.parentNode;
+                const children = Array.from(parent.children);
+                const draggedIdx = children.indexOf(window.draggedCard);
+                const targetIdx = children.indexOf(card);
+                
+                if (draggedIdx !== -1 && targetIdx !== -1 && draggedIdx !== targetIdx) {
+                    this.lastDragSwapTime = now;
+                    
+                    if (draggedIdx < targetIdx) {
+                        parent.insertBefore(window.draggedCard, card.nextSibling);
+                    } else {
+                        parent.insertBefore(window.draggedCard, card);
+                    }
+                    
+                    // Immediately trigger chart resizes on swap
+                    setTimeout(() => {
+                        this.visualizers.forEach(v => {
+                            if (v && v.chart && typeof v.chart.resize === 'function') {
+                                v.chart.resize();
+                            }
+                            if (v && typeof v.resize === 'function') {
+                                v.resize();
+                            }
+                        });
+                    }, 50);
+                }
+            }
+        });
+        
+        card.addEventListener('dragleave', () => {
+            card.classList.remove('drag-over');
+        });
+        
+        card.addEventListener('dragover', (e) => {
+            if (window.draggedCard && window.draggedCard !== card) {
+                e.preventDefault();
+            }
+        });
+        
+        card.addEventListener('drop', (e) => {
+            e.preventDefault();
+            card.classList.remove('drag-over');
+        });
+    }
+
+    async startAudit() {
         console.log('Starting audit...');
-        if (!this.wsManager || (this.wsManager.ws && this.wsManager.ws.readyState !== WebSocket.OPEN)) {
-            this.connectWebSocket();
+        const startBtn = document.getElementById('btn-start-audit');
+        const isResume = startBtn && startBtn.innerHTML.trim() === 'Resume';
+        
+        if (isResume) {
+            // "Resume" action: keep history and tree intact in memory
+            await this.controlAudit('resume');
         } else {
-            this.controlAudit('resume');
+            // "Start Audit" action: complete hard reset!
+            try {
+                // 1. Clear backend state
+                const res = await fetch('/api/control/clear', { method: 'POST' });
+                const clearResult = await res.json();
+                console.log('Hard Reset clear response:', clearResult);
+                
+                // 2. Clear frontend state
+                this.snapshots = [];
+                this.metrics = [];
+                this.currentExploreIteration = null;
+                this.budgetConsumed = 0.0;
+                this.remainingBudget = 0.0;
+                
+                if (this.playInterval) {
+                    this.toggleTimelinePlay(false);
+                }
+                
+                // 3. Clear all visual charts/KPIs
+                this.updateTimelineExplorer();
+                this.updateMetrics();
+                
+                // 4. Submit the current form configurations (which will also resume/start the run)
+                // Note: if form is empty/neutral, it sends nulls, running the model "ao natural"
+                await this.handleConfigSubmit();
+                
+                this.addActivityLog('New audit started (hard reset complete)');
+            } catch (e) {
+                console.error('Failed to start new audit:', e);
+                this.addActivityLog('Failed to start new audit');
+            }
         }
     }
 
@@ -1551,6 +2719,7 @@ class AuditLensApp {
         if (data.type === 'status') {
             this.updateStatusIndicator(true, data.status);
             this.addActivityLog(`Status: ${data.status} | Slices: ${data.slices_found}`);
+            this.fetchCurrentConfig();
             if (data.status === 'completed' || data.status === 'paused') {
                 this.fetchLogs();
             }
@@ -1590,15 +2759,14 @@ class AuditLensApp {
         this.visualizers.forEach((visualizer, key) => {
             if (key.includes('search-metrics-kpi')) {
                 const latestSlice = subsetMetrics[subsetMetrics.length - 1];
-                const latestMetrics = latestSlice?.search_metrics;
-                if (latestMetrics) {
-                    latestMetrics._sliceCount = subsetMetrics.length;
-                    latestMetrics.pattern_descriptor = latestSlice.pattern_descriptor;
-                    latestMetrics.top10_avg_quality = latestSlice.top10_avg_quality;
-                    visualizer.update(latestMetrics);
-                }
+                const latestMetrics = latestSlice?.search_metrics || {};
+                latestMetrics._sliceCount = subsetMetrics.length;
+                latestMetrics.pattern_descriptor = latestSlice?.pattern_descriptor || '-';
+                latestMetrics.top10_avg_quality = latestSlice?.top10_avg_quality || 0.0;
+                latestMetrics.budget_consumed = this.budgetConsumed || 0.0;
+                visualizer.update(latestMetrics);
             } else {
-                if (key.includes('contrast-kde') || key.includes('tree-diagnostics') || key.includes('pattern-details') || key.includes('quality-scatter') || key.includes('error-distribution')) {
+                if (key.includes('contrast-kde') || key.includes('tree-diagnostics') || key.includes('pattern-details') || key.includes('quality-scatter') || key.includes('error-distribution') || key.includes('pareto-frontier') || key.includes('feature-importance') || key.includes('depth-histogram') || key.includes('convergence-chart')) {
                     visualizer.update(snapshotPayload);
                 } else {
                     visualizer.update(subsetMetrics);
@@ -1801,6 +2969,19 @@ class AuditLensApp {
                 this.toggleTimelinePlay(false);
             }
             
+            // Clear interacted fields and inputs
+            this.interactedFields.clear();
+            const configForm = document.getElementById('config-form');
+            if (configForm) {
+                configForm.reset();
+            }
+            // Reset slider readouts to '-'
+            const sliders = ['max-gap', 'gamma', 'uct-factor', 'jaccard-threshold'];
+            sliders.forEach(id => {
+                const valEl = document.getElementById(id + '-val');
+                if (valEl) valEl.textContent = '-';
+            });
+            
             this.updateTimelineExplorer();
             this.updateMetrics();
             this.addActivityLog('Run logs reset and cleared');
@@ -1808,6 +2989,62 @@ class AuditLensApp {
             console.error('Failed to reset run data:', e);
             this.addActivityLog('Failed to reset run data');
         }
+    }
+
+    setupCardResizeSnapping() {
+        // Monitor mouseup to snap card sizes
+        document.addEventListener('mouseup', () => {
+            const containers = document.querySelectorAll('.chart-container');
+            let resizedAny = false;
+            
+            containers.forEach(container => {
+                const inlineWidth = container.style.width;
+                const inlineHeight = container.style.height;
+                
+                if (inlineWidth) {
+                    const parentWidth = container.parentNode.clientWidth;
+                    const widthPx = parseFloat(inlineWidth);
+                    const ratio = widthPx / parentWidth;
+                    
+                    // Snap width to nearest column percentage (33.33%, 50%, or 100%)
+                    let targetPercentage = 100;
+                    if (ratio < 0.42) {
+                        targetPercentage = 33.33;
+                    } else if (ratio < 0.75) {
+                        targetPercentage = 50;
+                    } else {
+                        targetPercentage = 100;
+                    }
+                    
+                    // Subtract gap margins (16px) proportionally
+                    const gapAdjust = 16 * (1 - targetPercentage / 100);
+                    container.style.width = `calc(${targetPercentage}% - ${gapAdjust}px)`;
+                    resizedAny = true;
+                }
+                
+                if (inlineHeight) {
+                    const heightPx = parseFloat(inlineHeight);
+                    // Snap height to increments of 50px with a minimum of 250px
+                    const targetHeight = Math.max(250, Math.round(heightPx / 50) * 50);
+                    container.style.height = `${targetHeight}px`;
+                    resizedAny = true;
+                }
+            });
+            
+            if (resizedAny) {
+                // Trigger resize callback on all visualizers
+                setTimeout(() => {
+                    this.visualizers.forEach(v => {
+                        if (v && v.chart && typeof v.chart.resize === 'function') {
+                            v.chart.resize();
+                        }
+                        if (v && typeof v.resize === 'function') {
+                            v.resize();
+                        }
+                    });
+                }, 50);
+            }
+        });
     }
 }
 

@@ -45,7 +45,7 @@ class ConfigurationState:
     """Stores the current audit configuration."""
     
     def __init__(self):
-        self.budgets: dict = {"search": 100}
+        self.budgets: dict = {"search": 0.0}
         self.subgroups_to_explore: list = []
         self.subgroups_to_ignore: list = []
         self.weights: dict = {}
@@ -61,19 +61,19 @@ class ConfigurationState:
     
     def update(self, config: ConfigParameters):
         """Update configuration from API."""
-        self.budgets = config.budgets
-        self.subgroups_to_explore = config.subgroups_to_explore
-        self.subgroups_to_ignore = config.subgroups_to_ignore
-        self.weights = config.weights
-        self.use_mock = config.use_mock
-        self.max_gap = config.max_gap
-        self.gamma = config.gamma
-        self.min_support = config.min_support
-        self.min_count_class = config.min_count_class
-        self.uct_factor = config.uct_factor
-        self.jaccard_threshold = config.jaccard_threshold
+        self.budgets = config.budgets if config.budgets is not None else {"search": 0.0}
+        self.subgroups_to_explore = config.subgroups_to_explore if config.subgroups_to_explore is not None else []
+        self.subgroups_to_ignore = config.subgroups_to_ignore if config.subgroups_to_ignore is not None else []
+        self.weights = config.weights if config.weights is not None else {}
+        self.use_mock = config.use_mock if config.use_mock is not None else False
+        self.max_gap = config.max_gap if config.max_gap is not None else 5
+        self.gamma = config.gamma if config.gamma is not None else 0.5
+        self.min_support = config.min_support if config.min_support is not None else 10
+        self.min_count_class = config.min_count_class if config.min_count_class is not None else 5
+        self.uct_factor = config.uct_factor if config.uct_factor is not None else 1.2
+        self.jaccard_threshold = config.jaccard_threshold if config.jaccard_threshold is not None else 0.3
         self.budget_consumed = 0.0
-        self.status = RunStatus.RUNNING
+        self.status = RunStatus.RUNNING if self.get_remaining_budget() > 0 else RunStatus.IDLE
     
     def get_remaining_budget(self) -> float:
         """Get remaining search budget."""
@@ -511,6 +511,172 @@ async def receive_slice(slice_data: Slice):
         "remaining_budget": config_state.get_remaining_budget()
     }
 
+@app.post("/api/snapshots")
+async def receive_snapshot(payload: dict = Body(...)):
+    """
+    Endpoint for receiving a full structured snapshot from the model.
+    """
+    metrics = payload.get("metrics", {})
+    patterns = payload.get("patterns", [])
+    status = payload.get("status", "running")
+    
+    # Consume budget if requested in the payload
+    consume_amount = payload.get("consume", 0.0)
+    if consume_amount > 0:
+        config_state.consume_budget(consume_amount)
+        
+    # Process patterns to extract/compute descriptive contrast, wracc, and efficiency metrics
+    processed_patterns = []
+    for p in patterns:
+        if not isinstance(p, dict):
+            continue
+        if "attributes" not in p:
+            p["attributes"] = {}
+            
+        attrs = p["attributes"]
+        sup_pct = attrs.get("support_percentage", 0.0)
+        delta_g = attrs.get("delta_g", 0.0)
+        separation = attrs.get("separation", delta_g)
+        
+        # Calculate Contrast metrics
+        attrs["wracc"] = (sup_pct / 100.0) * delta_g
+        attrs["contrast_metric"] = separation
+        
+        # Calculate Efficiency (Quality score normalized by total time budget spent)
+        attrs["efficiency"] = p.get("quality_score", 0.0) / max(1.0, config_state.budget_consumed)
+        processed_patterns.append(p)
+        
+    iteration = metrics.get("iteration_count", len(slice_history) + 1)
+    
+    # Map the received payload into the standard AuditSnapshot structure
+    snapshot = {
+        "id": f"run-received-{iteration}",
+        "iteration": iteration,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "metadata": {"source": "api-snapshot-post"},
+        "global_metrics": {
+            "avg_error": metrics.get("avg_error", 0.0),
+            "tree_progress": metrics.get("tree_progress", 0.0),
+            "top_quality": metrics.get("top_quality", 0.0),
+            "explored_nodes": metrics.get("explored_nodes", 0),
+            "search_space": metrics.get("search_space", 50000),
+            "explored_rate": metrics.get("explored_rate", 0.0),
+            "stability": metrics.get("stability", 0),
+            "rollout_success_rate": metrics.get("rollout_success_rate", 1.0),
+            "global_errors_class_0": metrics.get("global_errors_class_0", []),
+            "global_errors_class_1": metrics.get("global_errors_class_1", []),
+            
+            # New config & search stats
+            "uct_factor": metrics.get("uct_factor", 1.2),
+            "support_penalty": metrics.get("support_penalty", 0.5),
+            "max_gap": metrics.get("max_gap", 5),
+            "max_depth": metrics.get("max_depth", 0),
+            "total_elapsed_time": metrics.get("total_elapsed_time", 0.0),
+
+            # New Telemetry Metrics
+            "pareto_frontier": metrics.get("pareto_frontier", []),
+            "feature_importance": metrics.get("feature_importance", {}),
+            "depth_histogram": metrics.get("depth_histogram", []),
+            "anytime_quality": metrics.get("anytime_quality", []),
+            "path_diversity": metrics.get("path_diversity", 0.0),
+            "search_space_diagnostics": metrics.get("search_space_diagnostics", {})
+        },
+        "discovered_patterns": processed_patterns
+    }
+    
+    slice_history.append(snapshot)
+    
+    # Update status based on remaining budget or explicit finished status
+    if config_state.get_remaining_budget() <= 0:
+        config_state.status = RunStatus.PAUSED
+    elif status == "finished":
+        config_state.status = RunStatus.COMPLETED
+    elif status == "paused":
+        config_state.status = RunStatus.PAUSED
+    # Do not change the run status on intermediate "running" payloads.
+    
+    save_slice_history()
+
+    if status in ("running", "paused", "finished"):
+        await connection_manager.broadcast({"type": "snapshot", "snapshot": snapshot})
+    await connection_manager.broadcast({
+        "type": "status",
+        "status": config_state.status.value,
+        "budget": config_state.get_remaining_budget(),
+        "slices_found": len(slice_history)
+    })
+    
+    params = {
+        "gamma": config_state.gamma,
+        "max_gap": config_state.max_gap,
+        "min_support": config_state.min_support,
+        "min_count_class": config_state.min_count_class,
+        "uct_factor": config_state.uct_factor,
+        "jaccard_threshold": config_state.jaccard_threshold,
+    }
+    if config_state.weights:
+        params["weights"] = config_state.weights
+        
+    return {
+        "status": "acknowledged",
+        "remaining_budget": config_state.get_remaining_budget(),
+        "run_status": config_state.status.value,
+        "params": params
+    }
+
+@app.post("/api/control/inject")
+async def inject_budget(payload: dict = Body(...)):
+    """
+    Inject additional search budget and set focus weight on a specific node/pattern.
+    """
+    pattern_id = payload.get("pattern_id")
+    seconds = float(payload.get("seconds", 10.0))
+    
+    # 1. Add budget to search budget limit
+    config_state.budgets["search"] = config_state.budgets.get("search", 0.0) + seconds
+    
+    # 2. Add focus weight to weights map
+    if pattern_id:
+        config_state.weights[pattern_id] = 2.0  # Focus weight multiplier
+        
+    # 3. Transition to running
+    config_state.status = RunStatus.RUNNING
+    
+    # Broadcast status update
+    await connection_manager.broadcast({
+        "type": "status",
+        "status": config_state.status.value,
+        "budget": config_state.get_remaining_budget(),
+        "slices_found": len(slice_history)
+    })
+    
+    return {
+        "status": "injected",
+        "remaining_budget": config_state.get_remaining_budget(),
+        "weights": config_state.weights,
+        "run_status": config_state.status.value
+    }
+
+@app.post("/api/control/focus")
+async def focus_pattern_endpoint(payload: dict = Body(...)):
+    """
+    Toggle focus weight on a specific pattern.
+    """
+    pattern_id = payload.get("pattern_id")
+    focused = bool(payload.get("focused", True))
+    
+    if pattern_id:
+        if focused:
+            config_state.weights[pattern_id] = 2.0  # Focus weight
+        else:
+            if pattern_id in config_state.weights:
+                del config_state.weights[pattern_id]
+                
+    return {
+        "status": "focus_updated",
+        "weights": config_state.weights
+    }
+
 @app.post("/api/control/{action}")
 async def control_run(action: str):
     """
@@ -527,7 +693,8 @@ async def control_run(action: str):
         slice_history = []
         next_iteration = 1
         config_state.status = RunStatus.IDLE
-        config_state.budgets['search'] = 100.0 # reset search budget
+        config_state.budgets['search'] = 0.0 # reset search budget
+        config_state.budget_consumed = 0.0
         if HISTORY_FILE.exists():
             try:
                 HISTORY_FILE.unlink()
@@ -567,25 +734,34 @@ async def consume_budget(req: ConsumeRequest):
     config_state.consume_budget(req.amount)
     return {"remaining_budget": config_state.get_remaining_budget()}
 
+
 @app.get("/api/config/current")
 async def get_current_config():
     """
     Endpoint for the parallel model to fetch the current search config.
     """
-    return {
-        "budgets": config_state.budgets,
-        "explore": config_state.subgroups_to_explore,
-        "ignore": config_state.subgroups_to_ignore,
+    cfg = {
+        "status": config_state.status.value,
         "use_mock": config_state.use_mock,
         "remaining_budget": config_state.get_remaining_budget(),
-        "weights": config_state.weights,
-        "max_gap": config_state.max_gap,
-        "gamma": config_state.gamma,
-        "min_support": config_state.min_support,
-        "min_count_class": config_state.min_count_class,
-        "uct_factor": config_state.uct_factor,
-        "jaccard_threshold": config_state.jaccard_threshold
+        "budget_consumed": config_state.budget_consumed
     }
+    
+    if config_state.budgets:
+        cfg["budgets"] = config_state.budgets
+    if config_state.subgroups_to_explore:
+        cfg["explore"] = config_state.subgroups_to_explore
+    if config_state.subgroups_to_ignore:
+        cfg["ignore"] = config_state.subgroups_to_ignore
+    if config_state.weights:
+        cfg["weights"] = config_state.weights
+        
+    for param in ["max_gap", "gamma", "min_support", "min_count_class", "uct_factor", "jaccard_threshold"]:
+        val = getattr(config_state, param, None)
+        if val is not None:
+            cfg[param] = val
+            
+    return cfg
 
 
 @app.post("/api/control")

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict
+from typing import Dict, List, Optional
 from enum import Enum
 
 class RunStatus(str, Enum):
@@ -37,17 +37,17 @@ class Slice(BaseModel):
 
 
 class ConfigParameters(BaseModel):
-    budgets: Dict[str, float] = Field(..., description="Exploration budgets")
-    use_mock: bool = Field(False, description="Use mock model data")
-    subgroups_to_explore: list[str] = Field(default_factory=list, description="Subgroups to explore")
-    subgroups_to_ignore: list[str] = Field(default_factory=list, description="Subgroups to ignore")
-    weights: Dict[str, float] = Field(default_factory=dict, description="User defined weights for feedback/direction")
-    max_gap: int = Field(5, description="Maximum gap constraint")
-    gamma: float = Field(0.5, description="Support penalty coefficient")
-    min_support: int = Field(10, description="Minimum support count")
-    min_count_class: int = Field(5, description="Minimum count per class")
-    uct_factor: float = Field(1.2, description="Exploration factor UCT")
-    jaccard_threshold: float = Field(0.3, description="Jaccard similarity threshold")
+    budgets: Optional[Dict[str, float]] = Field(None, description="Exploration budgets")
+    use_mock: Optional[bool] = Field(None, description="Use mock model data")
+    subgroups_to_explore: Optional[List[str]] = Field(None, description="Subgroups to explore")
+    subgroups_to_ignore: Optional[List[str]] = Field(None, description="Subgroups to ignore")
+    weights: Optional[Dict[str, float]] = Field(None, description="User defined weights for feedback/direction")
+    max_gap: Optional[int] = Field(None, description="Maximum gap constraint")
+    gamma: Optional[float] = Field(None, description="Support penalty coefficient")
+    min_support: Optional[int] = Field(None, description="Minimum support count")
+    min_count_class: Optional[int] = Field(None, description="Minimum count per class")
+    uct_factor: Optional[float] = Field(None, description="Exploration factor UCT")
+    jaccard_threshold: Optional[float] = Field(None, description="Jaccard similarity threshold")
 
 class ConsumeRequest(BaseModel):
     amount: float
