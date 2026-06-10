@@ -417,10 +417,166 @@
             opacity: 1;
             transform: translateX(-50%) translateY(-2px);
         }
+
+        /* Insight Popover for Charts */
+        .insight-wrapper {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+        
+        .insight-icon {
+            color: #71717a; /* text-zinc-500 */
+            cursor: help;
+            transition: color 0.2s;
+            opacity: 0.7;
+        }
+        
+        .insight-wrapper:hover .insight-icon {
+            color: #e4e4e7; /* text-zinc-200 */
+            opacity: 1;
+        }
+        
+        .insight-popover {
+            visibility: hidden;
+            width: 320px;
+            background-color: #18181b; /* bg-zinc-900 */
+            color: #e4e4e7; /* text-zinc-200 */
+            border: 1px solid #3f3f46; /* border-zinc-700 */
+            border-radius: 8px;
+            padding: 12px;
+            position: absolute;
+            z-index: 50;
+            top: 100%;
+            right: 0;
+            margin-top: 8px;
+            opacity: 0;
+            transform: translateY(-4px);
+            transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            font-size: 12px;
+            line-height: 1.5;
+            font-weight: normal;
+            text-align: left;
+        }
+        
+        .insight-wrapper:hover .insight-popover {
+            visibility: visible;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        .insight-popover .insight-section-title {
+            color: #60a5fa; /* text-blue-400 */
+            font-weight: 600;
+            margin-bottom: 2px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .insight-popover .insight-section-content {
+            margin-bottom: 8px;
+            color: #a1a1aa; /* text-zinc-400 */
+        }
+        
+        .insight-popover .insight-section-content.insight-dynamic {
+            color: #f4f4f5; /* text-zinc-100 */
+            font-weight: 500;
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body class="bg-zinc-950">
-    <div class="grid-layout">
+    <!-- Setup View (Initial configuration interface) -->
+    <div id="setup-view" class="min-h-screen flex items-center justify-center p-6">
+        <div class="w-full max-w-2xl bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-2xl space-y-6">
+            <div class="flex items-center gap-4 border-b border-zinc-800 pb-4">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-xl font-bold text-zinc-100">AuditLens</h2>
+                    <p class="text-sm text-zinc-400">Model Audit & Dataset Ingestion Pipeline Configuration</p>
+                </div>
+            </div>
+
+            <!-- PHASE 1: HANDSHAKE CONEXAO -->
+            <div id="connection-step-panel" class="space-y-4">
+                <span class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Passo 1: Estabelecer Conexão com o Modelo</span>
+                <div class="form-group">
+                    <label class="form-label" for="setup-model-url">Endpoint do Servidor do Modelo (IP/Porta)</label>
+                    <div class="flex gap-2">
+                        <input type="url" id="setup-model-url" class="form-input flex-grow" value="http://localhost:8001/api/simulator/handshake" placeholder="ex: http://localhost:8002" required>
+                        <button type="button" id="btn-connect-server" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded transition-colors text-xs uppercase tracking-wider font-bold">Conectar</button>
+                    </div>
+                    <div class="mt-2 flex flex-col gap-2">
+                        <span id="server-status-badge" class="text-xs text-zinc-500">Aguardando inserção de endpoint...</span>
+                        <div id="connection-error-box" class="hidden p-3 bg-red-950/40 border border-red-900/50 rounded text-xs text-red-200 font-mono whitespace-pre-wrap"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PHASE 2, 3 & 4: CONFIGURACAO DINAMICA E INICIALIZACAO -->
+            <form id="setup-form" class="space-y-6 hidden">
+                <div class="border-t border-zinc-800 pt-4">
+                    <span class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Passo 2: Configuração e Parâmetros do Modelo</span>
+                </div>
+                
+                <!-- Ingestion Input (Path or Upload) -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="space-y-2">
+                        <label class="form-label" for="setup-dataset-path">Caminho do Dataset no Servidor</label>
+                        <input type="text" id="setup-dataset-path" name="setup_dataset_path" class="form-input" placeholder="ex: malware_dataset.csv">
+                        <span class="text-[10px] text-zinc-500 block">Caminho relativo à pasta de dados na raiz do servidor.</span>
+                    </div>
+                    <div class="space-y-2">
+                        <label class="form-label">Upload de Dataset (Multipart Stream)</label>
+                        <div id="upload-drag-zone" class="border border-dashed border-zinc-700 hover:border-zinc-500 rounded-lg p-3 text-center cursor-pointer transition-colors relative">
+                            <input type="file" id="setup-file-input" name="file" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                            <svg class="w-6 h-6 mx-auto text-zinc-500 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                            </svg>
+                            <span id="upload-text" class="text-xs text-zinc-400 block font-medium">Clique ou Arraste o arquivo</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Identity Context Filters (Toxicity exclusive, hidden by default) -->
+                <div id="setup-identity-section" class="space-y-3 p-4 bg-zinc-850 border border-zinc-800 rounded-lg hidden">
+                    <span class="block text-xs font-semibold text-zinc-300 uppercase tracking-wider">Filtros de Contexto de Identidade</span>
+                    <div class="flex flex-col gap-2">
+                        <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                            <input type="checkbox" name="setup_identities" value="female" class="w-4 h-4 rounded text-blue-600 accent-blue-500">
+                            Avaliar comentários relacionados à identidade feminina
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                            <input type="checkbox" name="setup_identities" value="sexual_orientation" class="w-4 h-4 rounded text-blue-600 accent-blue-500">
+                            Avaliar comentários relacionados à orientação sexual (gay/lesbiana)
+                        </label>
+                    </div>
+                </div>
+
+                <!-- DYNAMIC CONFIGURATION CONTAINER (Fase 2 & 3) -->
+                <div class="border-t border-zinc-800 pt-4">
+                    <span class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">Parâmetros Dinâmicos do Algoritmo</span>
+                    <div id="dynamic-form-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Generado dinamicamente via JS -->
+                    </div>
+                </div>
+
+                <!-- Initialize Button -->
+                <button type="submit" id="btn-initialize-pipeline" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs uppercase tracking-wider font-bold">
+                    <span>Iniciar Modelo</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div id="dashboard-view" class="grid-layout hidden">
         <!-- Header -->
         <header class="header rounded-lg px-6 py-4 flex items-center justify-between">
             <div class="flex items-center gap-4">
@@ -567,14 +723,14 @@
 
             <!-- Global View Tab -->
             <div id="global-view" class="tab-content active">
-                <!-- Chart 1: Quality Scatter -->
+                <!-- Chart 1: Trade-off Scatter Map -->
                 <div class="chart-container rounded-lg overflow-hidden">
                     <div class="chart-header">
                         <h3 class="chart-title">
                             <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l4-4m0 0l-4 4m4-4H9a7 7 0 00-7 7v8a2 2 0 002 2h2m8-4a2 2 0 102 2m-6-6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V8z"></path>
                             </svg>
-                            Priority Matrix (4-Quadrant Analysis)
+                            Trade-off Map (Contrast vs Support)
                         </h3>
                         <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -582,17 +738,17 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="chart-content" id="chart-metrics"></div>
+                    <div class="chart-content" id="chart-tradeoff-map"></div>
                 </div>
 
-                 <!-- Chart 2: Error Distribution -->
+                 <!-- Chart 2: Quality Score Radar -->
                 <div class="chart-container rounded-lg overflow-hidden">
                     <div class="chart-header">
                         <h3 class="chart-title">
                             <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
                             </svg>
-                            Slice Contrast & WRAcc Contrast
+                            Quality Score Components
                         </h3>
                         <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -600,10 +756,11 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="chart-content" id="chart-quality"></div>
+                    <div class="chart-content" id="chart-quality-radar"></div>
                 </div>
 
-                <!-- Chart 3: Pareto Frontier -->
+
+                <!-- Chart 3: Pareto Frontier (Common) -->
                 <div class="chart-container rounded-lg overflow-hidden">
                     <div class="chart-header">
                         <h3 class="chart-title">
@@ -621,8 +778,8 @@
                     <div class="chart-content" id="chart-pareto"></div>
                 </div>
 
-                <!-- Chart 4: Feature Importance -->
-                <div class="chart-container rounded-lg overflow-hidden">
+                <!-- Chart 4: Feature Importance (Malware only) -->
+                <div class="chart-container rounded-lg overflow-hidden malware-only hidden">
                     <div class="chart-header">
                         <h3 class="chart-title">
                             <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -639,8 +796,8 @@
                     <div class="chart-content" id="chart-feature-importance"></div>
                 </div>
 
-                <!-- Chart 5: Tree Topology / Search Depth Histogram -->
-                <div class="chart-container rounded-lg overflow-hidden">
+                <!-- Chart 5: Tree Topology / Search Depth Histogram (Malware only) -->
+                <div class="chart-container rounded-lg overflow-hidden malware-only hidden">
                     <div class="chart-header">
                         <h3 class="chart-title">
                             <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -655,6 +812,81 @@
                         </button>
                     </div>
                     <div class="chart-content" id="chart-depth-histogram"></div>
+                </div>
+
+                <!-- Chart 6: Subsequence Importance Heatmap (Malware only) -->
+                <div class="chart-container rounded-lg overflow-hidden malware-only hidden">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+                            </svg>
+                            Subsequence Importance Heatmap
+                        </h3>
+                        <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="chart-content" id="chart-subsequence-importance"></div>
+                </div>
+
+                <!-- Chart 7: UMAP embedding scatter (Malware only) -->
+                <div class="chart-container rounded-lg overflow-hidden malware-only hidden">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"></path>
+                            </svg>
+                            Sequence Embedding Projection (UMAP)
+                        </h3>
+                        <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="chart-content" id="chart-sequence-embeddings"></div>
+                </div>
+
+                <!-- Chart 8: Identity Error Facets (Toxicity only) -->
+                <div class="chart-container rounded-lg overflow-hidden toxicity-only hidden">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2a2 2 0 00-2-2H5a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v8m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v3m-6 0h6"></path>
+                            </svg>
+                            Identity Faceted Error Matrix
+                        </h3>
+                        <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="chart-content" id="chart-identity-error-matrix"></div>
+                </div>
+
+                <!-- Chart 9: Problematic Slice Discovery Panel (Toxicity only) -->
+                <div class="chart-container rounded-lg overflow-hidden toxicity-only hidden col-span-2" style="height: auto; min-height: 350px;">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon text-red-450" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:16px;height:16px;">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                            Problematic Slices Discovery Panel (High-Loss Slices)
+                        </h3>
+                        <button class="text-zinc-400 hover:text-zinc-200 transition-colors btn-close-chart" title="Remove Chart">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-6 overflow-y-auto" id="chart-problematic-slices" style="height: calc(100% - 45px); min-height: 300px;">
+                        <!-- Rendered via HTML dynamic builder in JS -->
+                    </div>
                 </div>
 
                 <!-- Card 3: MCTS Tree Diagnostics -->
@@ -689,13 +921,26 @@
                 
                 <!-- Redesigned Pattern Detail Container -->
                 <div id="pattern-details-container" class="col-span-2 w-full"></div>
+
+                <!-- Soft Error Distribution (Moved from Global View) -->
+                <div class="chart-container rounded-lg overflow-hidden" id="soft-error-container">
+                    <div class="chart-header">
+                        <h3 class="chart-title">
+                            <svg class="chart-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+                            </svg>
+                            Soft Error Distribution (μ ± σ)
+                        </h3>
+                    </div>
+                    <div class="chart-content" id="chart-error-distribution"></div>
+                </div>
             </div>
         </div>
 
         <!-- Sidebar: Control Panel -->
         <aside class="sidebar rounded-lg overflow-hidden flex flex-col">
             <!-- Config Section -->
-            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            <div class="flex-none p-4 space-y-4">
                 <div>
                     <div class="flex items-center justify-between border-b border-zinc-800 mb-4 pb-2">
                         <h2 class="text-sm font-semibold text-zinc-200">Config Panel</h2>
@@ -706,22 +951,6 @@
                         </button>
                     </div>
                     <form id="config-form" class="space-y-4">
-                        <div class="form-group">
-                            <label class="form-label" for="search-budget">
-                                Search Budget
-                                <span class="tooltip-container">
-                                    <span class="info-icon">?</span>
-                                    <span class="tooltip-text">Maximum time in seconds the model will run in the cycle.</span>
-                                </span>
-                            </label>
-                            <input type="number" id="search-budget" name="search_budget" class="form-input" placeholder="e.g., 100" min="1">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                                <input type="checkbox" id="use-mock" name="use_mock" style="width: 14px; height: 14px; cursor: pointer;">
-                                <span style="text-transform: none; font-weight: normal; color: #a1a1a6;">Use Mock Data Simulator</span>
-                            </label>
-                        </div>
                         <div class="form-group">
                             <label class="form-label" for="subgroups-explore">Subgroups to Explore</label>
                             <textarea id="subgroups-explore" name="subgroups_explore" class="form-textarea" placeholder="Comma-separated: group1, group2"></textarea>
@@ -741,74 +970,9 @@
                             <textarea id="weights-input" name="weights_input" class="form-textarea" placeholder='{"quality": 1.0, "support": 0.5}'></textarea>
                         </div>
                         
-                        <div class="border-t border-zinc-800 pt-4 mt-4 space-y-4">
-                            <h3 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Search Parameters</h3>
-                            
-                            <div class="form-group">
-                                <label class="form-label flex justify-between items-center" for="max-gap">
-                                    <span class="flex items-center">
-                                        Max Gap
-                                        <span class="tooltip-container">
-                                            <span class="info-icon">?</span>
-                                            <span class="tooltip-text">Maximum number of ignored elements between events in a contrast sequence.</span>
-                                        </span>
-                                    </span>
-                                    <span id="max-gap-val" class="text-blue-400 font-mono font-bold">-</span>
-                                </label>
-                                <input type="range" id="max-gap" name="max_gap" min="1" max="20" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label flex justify-between items-center" for="gamma">
-                                    <span class="flex items-center">
-                                        Support Penalty (Γ)
-                                        <span class="tooltip-container">
-                                            <span class="info-icon">?</span>
-                                            <span class="tooltip-text">Penalty applied to prevent excessively small or noisy subgroups.</span>
-                                        </span>
-                                    </span>
-                                    <span id="gamma-val" class="text-blue-400 font-mono font-bold">-</span>
-                                </label>
-                                <input type="range" id="gamma" name="gamma" min="0" max="1" step="0.01" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label" for="min-support">Min Support</label>
-                                <input type="number" id="min-support" name="min_support" min="1" class="form-input" placeholder="e.g., 10">
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label" for="min-count-class">Min Count Per Class</label>
-                                <input type="number" id="min-count-class" name="min_count_class" min="1" class="form-input" placeholder="e.g., 5">
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label flex justify-between items-center" for="uct-factor">
-                                    <span class="flex items-center">
-                                        UCT Exploration Constant
-                                        <span class="tooltip-container">
-                                            <span class="info-icon">?</span>
-                                            <span class="tooltip-text">Controls the MCTS balance: higher values force the model to explore new paths; lower values focus on refining known paths (exploitation).</span>
-                                        </span>
-                                    </span>
-                                    <span id="uct-factor-val" class="text-blue-400 font-mono font-bold">-</span>
-                                </label>
-                                <input type="range" id="uct-factor" name="uct_factor" min="0.1" max="5" step="0.1" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label flex justify-between items-center" for="jaccard-threshold">
-                                    <span class="flex items-center">
-                                        Jaccard Threshold (Θ)
-                                        <span class="tooltip-container">
-                                            <span class="info-icon">?</span>
-                                            <span class="tooltip-text">Ensures diversity by filtering subgroups that have significant data overlap.</span>
-                                        </span>
-                                    </span>
-                                    <span id="jaccard-threshold-val" class="text-blue-400 font-mono font-bold">-</span>
-                                </label>
-                                <input type="range" id="jaccard-threshold" name="jaccard_threshold" min="0" max="1" step="0.05" class="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
-                            </div>
+                        <!-- Dynamic fields rendered here -->
+                        <div id="sidebar-dynamic-fields" class="space-y-4 pt-4 border-t border-zinc-800">
+                            <!-- Generated dynamically via JS -->
                         </div>
 
                         <button type="submit" class="btn-submit">Submit Config</button>
@@ -817,16 +981,16 @@
             </div>
 
             <!-- Status Section -->
-            <div class="px-4 py-3 border-t border-zinc-800 bg-zinc-900">
-                <h2 class="text-sm font-semibold text-zinc-200 mb-2">Activity</h2>
-                <div id="activity-log" class="text-xs text-zinc-500 space-y-1 max-h-32 overflow-y-auto">
+            <div class="flex-1 flex flex-col px-4 py-3 border-t border-zinc-800 bg-zinc-900 mt-auto min-h-0">
+                <h2 class="text-sm font-semibold text-zinc-200 mb-2 flex-none">Activity</h2>
+                <div id="activity-log" class="flex-1 text-xs text-zinc-500 space-y-1 overflow-y-auto pr-2 pb-2 min-h-0 font-mono break-all">
                     <div class="text-zinc-600">Ready</div>
                 </div>
             </div>
         </aside>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
     
     <!-- Floating sidebar reopen tab -->
     <button id="btn-expand-sidebar" class="fixed right-0 top-1/2 -translate-y-1/2 bg-zinc-900 hover:bg-zinc-800 border-l border-t border-b border-zinc-700 text-zinc-400 hover:text-zinc-200 py-4 px-1 rounded-l-md transition-all shadow-md hidden z-50 flex items-center justify-center font-bold" title="Expand Config Panel">

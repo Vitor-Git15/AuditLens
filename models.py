@@ -37,6 +37,10 @@ class Slice(BaseModel):
 
 
 class ConfigParameters(BaseModel):
+    model_config = {
+        "extra": "allow"
+    }
+
     budgets: Optional[Dict[str, float]] = Field(None, description="Exploration budgets")
     use_mock: Optional[bool] = Field(None, description="Use mock model data")
     subgroups_to_explore: Optional[List[str]] = Field(None, description="Subgroups to explore")
@@ -48,6 +52,11 @@ class ConfigParameters(BaseModel):
     min_count_class: Optional[int] = Field(None, description="Minimum count per class")
     uct_factor: Optional[float] = Field(None, description="Exploration factor UCT")
     jaccard_threshold: Optional[float] = Field(None, description="Jaccard similarity threshold")
+    model_server_url: Optional[str] = Field("http://localhost:8002", description="Model Server API URL")
+    domain: Optional[str] = Field("malware", description="Evaluation domain (malware or toxicity)")
+    dataset_path: Optional[str] = Field(None, description="Path or filename of data to evaluate")
+    identity_filters: Optional[List[str]] = Field(None, description="Identity context filters for evaluation")
+
 
 class ConsumeRequest(BaseModel):
     amount: float

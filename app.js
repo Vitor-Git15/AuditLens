@@ -41,11 +41,58 @@ class BaseVisualizer {
         this.chart = echarts.init(container, 'dark');
         this.data = [];
         this.setupResizeListener();
+        this.injectInfoPopover();
         setTimeout(() => {
             if (this.chart) {
                 this.chart.resize();
             }
         }, 50);
+    }
+
+    injectInfoPopover() {
+        const chartContainer = this.container.closest('.chart-container');
+        if (chartContainer) {
+            const header = chartContainer.querySelector('.chart-header');
+            if (header && !header.querySelector('.insight-wrapper')) {
+                const closeBtn = header.querySelector('.btn-close-chart');
+                const wrapper = document.createElement('div');
+                wrapper.className = 'insight-wrapper mr-2';
+                wrapper.innerHTML = `
+                    <svg class="w-4 h-4 insight-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <div class="insight-popover">
+                        <div class="insight-section-title">O que é</div>
+                        <div class="insight-section-content insight-what">Gráfico de Análise Visual</div>
+                        <div class="insight-section-title">O que avalia</div>
+                        <div class="insight-section-content insight-why">Métricas de performance ou comportamento do modelo</div>
+                        <div class="insight-section-title">Insight Atual</div>
+                        <div class="insight-section-content insight-dynamic insight-current">Aguardando dados suficientes para análise</div>
+                    </div>
+                `;
+                
+                wrapper.addEventListener('mouseenter', () => {
+                    const insight = this.getInsight();
+                    wrapper.querySelector('.insight-what').textContent = insight.what || 'Definição não disponível';
+                    wrapper.querySelector('.insight-why').textContent = insight.why || 'Avaliação não disponível';
+                    wrapper.querySelector('.insight-current').textContent = insight.current || 'Aguardando dados suficientes para análise';
+                });
+                
+                if (closeBtn) {
+                    header.insertBefore(wrapper, closeBtn);
+                } else {
+                    header.appendChild(wrapper);
+                }
+            }
+        }
+    }
+
+    getInsight() {
+        return {
+            what: "Gráfico Base",
+            why: "Estrutura genérica para componentes de visualização.",
+            current: "Nenhum dado dinâmico para analisar no momento."
+        };
     }
 
     setupResizeListener() {
@@ -135,10 +182,10 @@ class BaseVisualizer {
 }
 
 /**
- * Quality Scatter Visualizer
- * X: support_percentage, Y: quality_score_phi, bubble size: delta_g
+ * Trade-off Scatter Map Visualizer
+ * X: Support, Y: Contrast (Δg), Size: Quality (φ), Color: Class Balance
  */
-class QualityScatter extends BaseVisualizer {
+class TradeoffScatter extends BaseVisualizer {
     hasCompatibleData() {
         const snapshots = this.data?.snapshots || [];
         if (snapshots.length === 0) return false;
@@ -153,31 +200,378 @@ class QualityScatter extends BaseVisualizer {
         return latest.discovered_patterns || [];
     }
 
+    getInsight() {
+        return {
+            what: "Trade-off Map (Contrast vs Support)",
+            why: "Mapeia as fatias descobertas avaliando o trade-off crítico: fatias com alta divergência de erro (Contraste Δg) tendem a ter menor representatividade (Suporte). O tamanho da bolha representa a Qualidade (φ) global final, e a cor denota o equilíbrio das classes.",
+            current: "Analise os quadrantes para identificar as fatias de maior impacto."
+        };
+    }
+
     render() {
         const renderData = this.getRenderData();
         
-        // Prepare scatter data
         const scatterData = renderData.map(d => {
             const attrs = d.attributes || {};
-            const supPct = attrs.support_percentage || 0.0;
-            const contrast = attrs.delta_g || attrs.contrast_metric || 0.0;
+            const support = attrs.support || 0;
+            const contrast = attrs.delta_g || 0.0;
             const quality = d.quality_score || 0.0;
-            const wracc = attrs.wracc || 0.0;
-            const efficiency = attrs.efficiency || 0.0;
-            const supportCount = attrs.support || 0;
-            return [supPct, contrast, quality, wracc, efficiency, d.id, supportCount];
+            const balance = attrs.class_balance || 0.5;
+            return [support, contrast, quality, balance, d.id];
         });
 
         const option = {
+            tooltip: {
+                trigger: 'item',
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const val = params.value;
+                    return `<div style="font-size: 11px; line-height: 1.5; padding: 4px;">
+                        <strong style="color: #60a5fa; font-size: 12px;">Slice: ${val[4]}</strong><br/>
+                        <strong>Support (N):</strong> ${val[0]} amostras<br/>
+                        <strong>Contrast (Δg):</strong> ${val[1].toFixed(4)}<br/>
+                        <strong>Quality (φ):</strong> ${val[2].toFixed(4)}<br/>
+                        <strong>Class Balance:</strong> ${(val[3] * 100).toFixed(1)}% / ${((1 - val[3]) * 100).toFixed(1)}%
+                    </div>`;
+                }
+            },
+            visualMap: {
+                min: 0, max: 1,
+                dimension: 3,
+                orient: 'vertical',
+                right: 0,
+                top: 'center',
+                text: ['100% C0', '100% C1'],
+                calculable: true,
+                inRange: { color: ['#ef4444', '#a855f7', '#3b82f6'] },
+                textStyle: { color: '#a1a1a6', fontSize: 10 }
+            },
+            xAxis: {
+                type: 'value',
+                name: 'Support (Amostras)',
+                nameLocation: 'middle',
+                nameGap: 25,
+                scale: true,
+                min: (value) => Math.max(0, Math.floor(value.min - (value.max - value.min) * 0.1)),
+                max: (value) => Math.ceil(value.max + (value.max - value.min) * 0.1),
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6', fontSize: 10 },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            yAxis: {
+                type: 'value',
+                name: 'Contrast Strength (Δg)',
+                nameLocation: 'middle',
+                nameGap: 30,
+                scale: true,
+                min: (value) => Math.max(0, value.min - (value.max - value.min) * 0.1),
+                max: (value) => value.max + (value.max - value.min) * 0.1,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            grid: { left: '10%', right: '15%', bottom: '15%', top: '15%', containLabel: true },
+            series: [{
+                name: 'Slices',
+                type: 'scatter',
+                data: scatterData,
+                symbolSize: (val) => Math.max(8, Math.min(30, val[2] * 30)),
+                itemStyle: { borderColor: '#18181b', borderWidth: 1 }
+            }]
+        };
+
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * Quality Score Radar Visualizer
+ */
+class QualityDecompositionRadar extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        return snapshots[snapshots.length - 1]?.discovered_patterns?.length > 0;
+    }
+
+    getInsight() {
+        return {
+            what: "Quality Score Components",
+            why: "A Quality Score (φ) bruta do MCTS é uma composição matemática. Este radar desconstrói a métrica para a Top-1 Slice, permitindo entender exatamente qual fator puxou o escore para cima (Separação, Desvio, Balanceamento ou Suporte).",
+            current: "Visualizando métricas normalizadas."
+        };
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        const latest = snapshots[snapshots.length - 1];
+        const topSlice = latest?.discovered_patterns?.[0];
+        if (!topSlice) return;
+
+        const attrs = topSlice.attributes || {};
+        const sep = Math.min(1.0, attrs.separation || 0.0);
+        const dev = Math.min(1.0, attrs.deviation || 0.0);
+        // Normalize balance so that 0.5 is 1.0 (perfect balance), and 0 or 1 is 0.0
+        const balRaw = attrs.class_balance || 0.5;
+        const bal = 1.0 - (Math.abs(0.5 - balRaw) * 2);
+        const sup = attrs.support_penalty_pgB || 0.0;
+
+        const option = {
+            tooltip: { trigger: 'item', backgroundColor: '#18181b', borderColor: '#27272a', textStyle: { color: '#e4e4e7' } },
+            radar: {
+                indicator: [
+                    { name: 'Separation (s)', max: 1.0 },
+                    { name: 'Deviation (d)', max: 1.0 },
+                    { name: 'Balance (b)', max: 1.0 },
+                    { name: 'Support Penalty (p)', max: 1.0 }
+                ],
+                splitNumber: 4,
+                axisName: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: ['#27272a', '#27272a', '#3f3f46', '#3f3f46'] } },
+                splitArea: { areaStyle: { color: ['#18181b', '#18181b', '#18181b', '#18181b'] } },
+                axisLine: { lineStyle: { color: '#3f3f46' } }
+            },
+            series: [{
+                name: 'Quality Components',
+                type: 'radar',
+                data: [{
+                    value: [sep, dev, bal, sup],
+                    name: `Top Slice: ${topSlice.id}`,
+                    itemStyle: { color: '#60a5fa' },
+                    areaStyle: { color: 'rgba(96, 165, 250, 0.4)' }
+                }]
+            }]
+        };
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * Soft Error Distribution Visualizer
+ */
+class SoftErrorDistribution extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        return snapshots[snapshots.length - 1]?.discovered_patterns?.length > 0;
+    }
+
+    getInsight() {
+        return {
+            what: "Soft Error Distribution (μ ± σ)",
+            why: "Plota o erro médio (μ) e a margem de variância (σ) para as duas classes alvo da Top-1 Slice. Permite comparar visualmente o erro local, justificando a anomalia.",
+            current: "O intervalo representa ±1 desvio padrão."
+        };
+    }
+
+    render() {
+        const selectedPattern = window.app?.selectedPattern;
+        if (!selectedPattern) {
+            this.chart.clear();
+            this.chart.setOption({
+                title: {
+                    text: 'Selecione um padrão na lista\npara visualizar a distribuição de Soft Error',
+                    left: 'center', top: 'center',
+                    textStyle: { color: '#a1a1a6', fontSize: 12, fontWeight: 'normal' }
+                }
+            });
+            return;
+        }
+
+        const topSlice = selectedPattern;
+        const attrs = topSlice.attributes || {};
+        const mu0 = attrs.error_class_0 || 0;
+        const mu1 = attrs.error_class_1 || 0;
+        const sig0 = attrs.std_class_0 || 0;
+        const sig1 = attrs.std_class_1 || 0;
+
+        // Custom error bar rendering using ECharts custom series
+        const data = [
+            [0, mu0, Math.max(0, mu0 - sig0), Math.min(1, mu0 + sig0)],
+            [1, mu1, Math.max(0, mu1 - sig1), Math.min(1, mu1 + sig1)]
+        ];
+
+        const renderItem = (params, api) => {
+            const xValue = api.value(0);
+            const highPoint = api.coord([xValue, api.value(3)]);
+            const lowPoint = api.coord([xValue, api.value(2)]);
+            const halfWidth = api.size([1, 0])[0] * 0.1;
+            const style = api.style({ stroke: api.visual('color'), fill: null, lineWidth: 2 });
+            
+            return {
+                type: 'group',
+                children: [
+                    { type: 'line', shape: { x1: highPoint[0], y1: highPoint[1], x2: lowPoint[0], y2: lowPoint[1] }, style: style },
+                    { type: 'line', shape: { x1: highPoint[0] - halfWidth, y1: highPoint[1], x2: highPoint[0] + halfWidth, y2: highPoint[1] }, style: style },
+                    { type: 'line', shape: { x1: lowPoint[0] - halfWidth, y1: lowPoint[1], x2: lowPoint[0] + halfWidth, y2: lowPoint[1] }, style: style }
+                ]
+            };
+        };
+
+        const option = {
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: '#18181b', borderColor: '#27272a', textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const val = params[0].value;
+                    if (!val) return '';
+                    const mu = val[1].toFixed(4);
+                    const sig = (val[3] - val[1]).toFixed(4);
+                    const className = val[0] === 0 ? "Classe 0" : "Classe 1";
+                    return `<div style="padding: 4px;"><strong>${className}</strong><br/>μ: ${mu}<br/>σ: ±${sig}</div>`;
+                }
+            },
+            grid: { left: '15%', right: '10%', bottom: '15%', top: '20%', containLabel: true },
+            xAxis: {
+                type: 'category',
+                data: ['Classe 0', 'Classe 1'],
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' }
+            },
+            yAxis: {
+                type: 'value',
+                name: 'Soft Error (Loss)',
+                nameLocation: 'middle', nameGap: 40,
+                min: 0.0, max: 1.0,
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
+            series: [
+                {
+                    type: 'scatter',
+                    name: 'Média (μ)',
+                    data: [[0, mu0], [1, mu1]],
+                    itemStyle: { color: '#60a5fa' },
+                    symbolSize: 12
+                },
+                {
+                    type: 'custom',
+                    name: 'Variância (±σ)',
+                    renderItem: renderItem,
+                    data: data,
+                    itemStyle: { color: '#60a5fa' }
+                }
+            ]
+        };
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * SubsequenceImportanceHeatmap Visualizer
+ * X: API Operation names, Y: Discover patterns IDs, Value: Attribution weight
+ */
+class SubsequenceImportanceHeatmap extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.subsequence_importance;
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const dataInfo = latest.global_metrics.subsequence_importance;
+        
+        const option = {
             title: {
-                text: 'Priority Matrix (4-Quadrant Analysis)',
+                text: 'Subsequence API Importance Heatmap',
                 left: 'center',
                 top: 10,
-                textStyle: {
-                    color: '#e4e4e7',
-                    fontSize: 14,
-                    fontWeight: 'normal'
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
+            },
+            tooltip: {
+                position: 'top',
+                backgroundColor: '#18181b',
+                borderColor: '#27272a',
+                textStyle: { color: '#e4e4e7' },
+                formatter: (params) => {
+                    const api = dataInfo.apis[params.value[0]];
+                    const pattern = dataInfo.patterns[params.value[1]];
+                    const weight = params.value[2];
+                    return `<div style="font-size: 11px; padding: 4px; line-height: 1.5;">
+                        <strong style="color: #60a5fa;">API:</strong> ${api}<br/>
+                        <strong style="color: #a855f7;">Pattern ID:</strong> ${pattern}<br/>
+                        <strong>Attribution weight:</strong> ${weight.toFixed(3)}
+                    </div>`;
                 }
+            },
+            grid: { left: '15%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
+            xAxis: {
+                type: 'category',
+                data: dataInfo.apis.map(api => api.replace("API=", "")),
+                axisLabel: { color: '#a1a1a6', rotate: 25, fontSize: 9 },
+                splitArea: { show: true }
+            },
+            yAxis: {
+                type: 'category',
+                data: dataInfo.patterns,
+                axisLabel: { color: '#a1a1a6' },
+                splitArea: { show: true }
+            },
+            visualMap: {
+                min: 0,
+                max: 1,
+                calculable: true,
+                orient: 'horizontal',
+                left: 'center',
+                bottom: 5,
+                textStyle: { color: '#a1a1a6', fontSize: 10 },
+                inRange: {
+                    color: ['#18181b', '#1e293b', '#0369a1', '#0284c7', '#0284c7', '#0ea5e9', '#38bdf8']
+                }
+            },
+            series: [{
+                name: 'Attribution Weight',
+                type: 'heatmap',
+                data: dataInfo.matrix,
+                label: {
+                    show: true,
+                    fontSize: 9,
+                    color: '#e2e8f0',
+                    formatter: (p) => p.value[2] > 0.2 ? p.value[2].toFixed(2) : ''
+                },
+                emphasis: {
+                    itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' }
+                }
+            }]
+        };
+        this.chart.setOption(option);
+    }
+}
+
+/**
+ * SequenceEmbeddingScatter Visualizer
+ * Coordinates: t-SNE or UMAP projection, Color: Target label class
+ */
+class SequenceEmbeddingScatter extends BaseVisualizer {
+    hasCompatibleData() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return false;
+        const latest = snapshots[snapshots.length - 1];
+        return latest && latest.global_metrics && latest.global_metrics.embeddings;
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const embeddings = latest.global_metrics.embeddings || [];
+        
+        const malwareSeries = embeddings.filter(e => e.label).map(e => [...e.coords, e.id, e.descriptor]);
+        const benignSeries = embeddings.filter(e => !e.label).map(e => [...e.coords, e.id, e.descriptor]);
+        
+        const option = {
+            title: {
+                text: 'Sequence Embedding Projection (UMAP)',
+                left: 'center',
+                top: 10,
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
             },
             tooltip: {
                 trigger: 'item',
@@ -186,193 +580,84 @@ class QualityScatter extends BaseVisualizer {
                 textStyle: { color: '#e4e4e7' },
                 formatter: (params) => {
                     const val = params.value;
-                    if (!val) return '';
-                    const supPct = val[0];
-                    const contrast = val[1];
-                    const quality = val[2];
-                    const wracc = val[3];
-                    const efficiency = val[4];
-                    const id = val[5];
-                    const count = val[6];
-                    return `<div style="font-size: 11px; line-height: 1.5; padding: 4px;">
-                        <strong style="color: #60a5fa; font-size: 12px;">Slice: ${id}</strong><br/>
-                        <strong>Support (Coverage):</strong> ${supPct.toFixed(2)}% (${count})<br/>
-                        <strong>Contrast Strength:</strong> ${contrast.toFixed(4)}<br/>
-                        <strong>WRAcc Contrast:</strong> ${wracc.toFixed(4)}<br/>
-                        <strong>Efficiency:</strong> ${efficiency.toFixed(4)}<br/>
-                        <strong>Quality Score (φ):</strong> ${quality.toFixed(4)}
+                    return `<div style="font-size: 11px; max-width: 250px; white-space: normal; line-height: 1.5; padding: 4px;">
+                        <strong style="color: ${params.color}; font-size: 12px;">${val[2]} (${params.seriesName})</strong><br/>
+                        <strong>UMAP coords:</strong> [${val[0].toFixed(2)}, ${val[1].toFixed(2)}]<br/>
+                        <strong>Sequence trace:</strong> <span style="font-family: monospace; font-size: 10px; color: #a1a1a6;">${val[3]}</span>
                     </div>`;
                 }
             },
+            legend: {
+                data: ['Malicious Slices', 'Benign Slices'],
+                textStyle: { color: '#a1a1a6' },
+                bottom: 10
+            },
+            grid: { left: '10%', right: '5%', bottom: '15%', top: '15%', containLabel: true },
             xAxis: {
                 type: 'value',
-                name: 'Support Percentage (%)',
-                nameLocation: 'middle',
-                nameGap: 25,
-                min: 0,
-                max: 'dataMax',
-                axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6', formatter: '{value}%' },
-                splitLine: { lineStyle: { color: '#27272a' } }
-            },
-            yAxis: {
-                type: 'value',
-                name: 'Contrast Strength (Δg)',
-                nameLocation: 'middle',
-                nameGap: 30,
-                min: 0,
-                max: 'dataMax',
                 axisLine: { lineStyle: { color: '#3f3f46' } },
                 axisLabel: { color: '#a1a1a6' },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
-            grid: { left: '12%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
+            yAxis: {
+                type: 'value',
+                axisLine: { lineStyle: { color: '#3f3f46' } },
+                axisLabel: { color: '#a1a1a6' },
+                splitLine: { lineStyle: { color: '#27272a' } }
+            },
             series: [
                 {
-                    name: 'Slices',
+                    name: 'Malicious Slices',
                     type: 'scatter',
-                    data: scatterData,
-                    symbolSize: (val) => Math.max(8, Math.min(25, val[2] * 22)),
-                    itemStyle: { 
+                    data: malwareSeries,
+                    symbolSize: 12,
+                    itemStyle: {
+                        color: '#ef4444',
+                        borderColor: '#f87171',
+                        borderWidth: 1.5
+                    }
+                },
+                {
+                    name: 'Benign Slices',
+                    type: 'scatter',
+                    data: benignSeries,
+                    symbolSize: 12,
+                    itemStyle: {
                         color: '#3b82f6',
                         borderColor: '#60a5fa',
                         borderWidth: 1.5
-                    },
-                    emphasis: { 
-                        itemStyle: { 
-                            color: '#60a5fa',
-                            borderWidth: 2
-                        } 
-                    },
-                    markLine: {
-                        silent: true,
-                        symbol: 'none',
-                        lineStyle: { type: 'dashed', color: '#4b5563', width: 1.5 },
-                        data: [
-                            { xAxis: 15 },
-                            { yAxis: 0.2 }
-                        ]
-                    },
-                    markArea: {
-                        silent: true,
-                        data: [
-                            // High Priority: X > 15%, Y > 0.2
-                            [
-                                {
-                                    name: 'High Priority',
-                                    xAxis: 15,
-                                    yAxis: 0.2,
-                                    itemStyle: { color: 'rgba(239, 68, 68, 0.08)' },
-                                    label: { position: 'insideTopRight', color: '#f87171', fontSize: 10, fontWeight: 'bold' }
-                                },
-                                {
-                                    xAxis: 'max',
-                                    yAxis: 'max'
-                                }
-                            ],
-                            // Niche Subgroups: X <= 15%, Y > 0.2
-                            [
-                                {
-                                    name: 'Niche Subgroups',
-                                    xAxis: 0,
-                                    yAxis: 0.2,
-                                    itemStyle: { color: 'rgba(59, 130, 246, 0.08)' },
-                                    label: { position: 'insideTopLeft', color: '#60a5fa', fontSize: 10, fontWeight: 'bold' }
-                                },
-                                {
-                                    xAxis: 15,
-                                    yAxis: 'max'
-                                }
-                            ],
-                            // Noise: X <= 15%, Y <= 0.2
-                            [
-                                {
-                                    name: 'Noise',
-                                    xAxis: 0,
-                                    yAxis: 0,
-                                    itemStyle: { color: 'rgba(113, 113, 122, 0.04)' },
-                                    label: { position: 'insideBottomLeft', color: '#71717a', fontSize: 10, fontWeight: 'bold' }
-                                },
-                                {
-                                    xAxis: 15,
-                                    yAxis: 0.2
-                                }
-                            ],
-                            // Ignore: X > 15%, Y <= 0.2
-                            [
-                                {
-                                    name: 'Ignore',
-                                    xAxis: 15,
-                                    yAxis: 0,
-                                    itemStyle: { color: 'rgba(39, 39, 42, 0.08)' },
-                                    label: { position: 'insideBottomRight', color: '#52525b', fontSize: 10, fontWeight: 'bold' }
-                                },
-                                {
-                                    xAxis: 'max',
-                                    yAxis: 0.2
-                                }
-                            ]
-                        ]
                     }
                 }
             ]
         };
-
         this.chart.setOption(option);
-
-        // Bind click event
-        this.chart.off('click');
-        this.chart.on('click', (params) => {
-            if (params.componentSubType === 'scatter') {
-                const val = params.value;
-                if (val && val[5]) {
-                    const patternId = val[5];
-                    const detailsViz = window.app.visualizers.get('pattern-details-pattern-details-container');
-                    if (detailsViz) {
-                        detailsViz.selectedPatternId = patternId;
-                        detailsViz.render();
-                    }
-                    const tabBtn = document.querySelector('.tab-btn[data-tab="individual-patterns"]');
-                    if (tabBtn) {
-                        tabBtn.click();
-                    }
-                }
-            }
-        });
     }
 }
 
 /**
- * Error Distribution Visualizer
- * Bar chart with error bars for std_error_sigma
+ * IdentityFacetedErrorMatrix Visualizer
+ * Faceted bar graphs comparing False Positive and False Negative rates across groups
  */
-class ErrorDistribution extends BaseVisualizer {
+class IdentityFacetedErrorMatrix extends BaseVisualizer {
     hasCompatibleData() {
         const snapshots = this.data?.snapshots || [];
         if (snapshots.length === 0) return false;
         const latest = snapshots[snapshots.length - 1];
-        return latest && latest.discovered_patterns && latest.discovered_patterns.length > 0;
-    }
-
-    getRenderData() {
-        const snapshots = this.data?.snapshots || [];
-        if (snapshots.length === 0) return [];
-        const latest = snapshots[snapshots.length - 1];
-        return latest.discovered_patterns || [];
+        return latest && latest.global_metrics && latest.global_metrics.identity_metrics;
     }
 
     render() {
-        const renderData = this.getRenderData();
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) return;
+        const latest = snapshots[snapshots.length - 1];
+        const dataInfo = latest.global_metrics.identity_metrics;
+        
         const option = {
             title: {
-                text: 'Slice Contrast Strength vs WRAcc Contrast',
+                text: 'Error Bias Faceted by Identity Group',
                 left: 'center',
                 top: 10,
-                textStyle: {
-                    color: '#e4e4e7',
-                    fontSize: 14,
-                    fontWeight: 'normal'
-                }
+                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
             },
             tooltip: {
                 trigger: 'axis',
@@ -380,53 +665,152 @@ class ErrorDistribution extends BaseVisualizer {
                 borderColor: '#27272a',
                 textStyle: { color: '#e4e4e7' },
                 formatter: (params) => {
-                    if (params.length > 0) {
-                        const d = renderData[params[0].dataIndex];
-                        return `<div style="font-size: 11px; line-height: 1.5; padding: 4px;">
-                            <strong style="color: #60a5fa; font-size: 12px;">Slice: ${d.id}</strong><br/>
-                            <strong>Contrast Strength (Δg):</strong> ${(d.attributes.delta_g || 0).toFixed(4)}<br/>
-                            <strong>WRAcc Contrast:</strong> ${(d.attributes.wracc || 0).toFixed(4)}<br/>
-                            <strong>Coverage:</strong> ${(d.attributes.support_percentage || 0).toFixed(1)}% (${d.attributes.support})
-                        </div>`;
-                    }
+                    let html = `<div style="font-size: 11px; padding: 4px; line-height: 1.5;">
+                        <strong style="color: #60a5fa; font-size: 12px;">${params[0].name}</strong><br/>`;
+                    params.forEach(p => {
+                        html += `<strong>${p.seriesName}:</strong> ${(p.value * 100).toFixed(2)}%<br/>`;
+                    });
+                    html += `</div>`;
+                    return html;
                 }
             },
             legend: {
-                data: ['Contrast Strength (Δg)', 'WRAcc Contrast'],
+                data: ['False Positive Rate (FPR)', 'False Negative Rate (FNR)'],
                 textStyle: { color: '#a1a1a6' },
                 bottom: 10
             },
-            grid: { left: '12%', right: '5%', bottom: '20%', top: '15%', containLabel: true },
+            grid: { left: '10%', right: '5%', bottom: '20%', top: '15%', containLabel: true },
             xAxis: {
                 type: 'category',
-                data: renderData.map(d => d.id),
+                data: dataInfo.groups,
                 axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6', fontSize: 10, rotate: 20 }
+                axisLabel: { color: '#a1a1a6', fontSize: 10 }
             },
             yAxis: {
                 type: 'value',
-                name: 'Value',
+                name: 'Error Rate (%)',
                 axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6' },
+                axisLabel: { color: '#a1a1a6', formatter: (v) => `${(v * 100).toFixed(0)}%` },
                 splitLine: { lineStyle: { color: '#27272a' } }
             },
             series: [
                 {
-                    name: 'Contrast Strength (Δg)',
+                    name: 'False Positive Rate (FPR)',
                     type: 'bar',
-                    data: renderData.map(d => d.attributes.delta_g || d.attributes.contrast_metric || 0),
-                    itemStyle: { color: '#ef4444' }
+                    data: dataInfo.false_positives,
+                    itemStyle: { color: '#ef4444' },
+                    label: {
+                        show: true,
+                        position: 'top',
+                        color: '#f87171',
+                        formatter: (p) => `${(p.value * 100).toFixed(1)}%`
+                    }
                 },
                 {
-                    name: 'WRAcc Contrast',
+                    name: 'False Negative Rate (FNR)',
                     type: 'bar',
-                    data: renderData.map(d => d.attributes.wracc || 0),
-                    itemStyle: { color: '#3b82f6' }
+                    data: dataInfo.false_negatives,
+                    itemStyle: { color: '#fb923c' },
+                    label: {
+                        show: true,
+                        position: 'top',
+                        color: '#fdba74',
+                        formatter: (p) => `${(p.value * 100).toFixed(1)}%`
+                    }
                 }
             ]
         };
         this.chart.setOption(option);
     }
+}
+
+/**
+ * ProblematicSliceDiscoveryPanel Visualizer
+ * Grid-based card list highlighting high-loss feature + identity subgroups
+ */
+class ProblematicSliceDiscoveryPanel {
+    constructor(container) {
+        this.container = container;
+        this.data = null;
+    }
+
+    update(data) {
+        this.data = data;
+        this.render();
+    }
+
+    render() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) {
+            this.container.innerHTML = '<div class="text-xs text-zinc-505 py-6 text-center">Awaiting data iterations...</div>';
+            return;
+        }
+        const latest = snapshots[snapshots.length - 1];
+        const slices = latest.global_metrics?.problematic_slices || [];
+        
+        if (slices.length === 0) {
+            this.container.innerHTML = '<div class="text-xs text-zinc-505 py-6 text-center">No high-loss slices flagged.</div>';
+            return;
+        }
+        
+        this.container.replaceChildren();
+        
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 md:grid-cols-2 gap-4 w-full';
+        
+        slices.forEach(s => {
+            const card = document.createElement('div');
+            card.className = 'bg-zinc-850 border border-zinc-800 hover:border-red-950 p-4 rounded-lg flex flex-col justify-between transition-colors shadow';
+            
+            const header = document.createElement('div');
+            header.className = 'flex justify-between items-start mb-2';
+            
+            const sliceDesc = document.createElement('span');
+            sliceDesc.className = 'text-xs font-semibold text-zinc-200 font-mono break-all pr-2';
+            sliceDesc.textContent = s.slice;
+            
+            const badge = document.createElement('span');
+            badge.className = 'px-2 py-0.5 bg-red-950/60 text-red-400 border border-red-900/40 rounded text-[9px] font-bold uppercase tracking-wide flex-shrink-0';
+            badge.textContent = `Loss: ${s.loss.toFixed(2)}`;
+            
+            header.appendChild(sliceDesc);
+            header.appendChild(badge);
+            
+            const stats = document.createElement('div');
+            stats.className = 'flex justify-between items-center text-[10px] text-zinc-500 mt-2 border-t border-zinc-800/60 pt-2';
+            
+            const sup = document.createElement('span');
+            sup.textContent = `Support: n = ${s.support}`;
+            
+            const action = document.createElement('button');
+            action.className = 'text-blue-400 hover:text-blue-300 font-medium cursor-pointer transition-colors';
+            action.textContent = 'Focus Search';
+            action.onclick = async () => {
+                try {
+                    await fetch('/api/control/focus', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pattern_id: s.slice, focused: true })
+                    });
+                    window.app.addActivityLog(`Focused exploration search on: ${s.slice}`);
+                    window.app.fetchCurrentConfig();
+                } catch(err) {
+                    console.error('Focus slice err:', err);
+                }
+            };
+            
+            stats.appendChild(sup);
+            stats.appendChild(action);
+            
+            card.appendChild(header);
+            card.appendChild(stats);
+            grid.appendChild(card);
+        });
+        
+        this.container.appendChild(grid);
+    }
+
+    dispose() {}
 }
 
 /**
@@ -663,6 +1047,14 @@ class ConvergenceChart extends BaseVisualizer {
         return latest && latest.global_metrics && latest.global_metrics.anytime_quality && latest.global_metrics.anytime_quality.length > 0;
     }
 
+    getInsight() {
+        return {
+            what: "Quality Convergence (Step Chart)",
+            why: "Acompanha o maior Quality Score (φ) encontrado ao longo do tempo/iterações. Uma curva em degraus íngreme no início indica que o algoritmo MCTSExtent convergiu rapidamente para subgrupos de alto contraste.",
+            current: "Observando a convergência em tempo real."
+        };
+    }
+
     render() {
         const snapshots = this.data?.snapshots || [];
         if (snapshots.length === 0) return;
@@ -810,7 +1202,34 @@ class ParetoFrontier extends BaseVisualizer {
         const snapshots = this.data?.snapshots || [];
         if (snapshots.length === 0) return;
         const latest = snapshots[snapshots.length - 1];
-        const pareto = latest.global_metrics.pareto_frontier || [];
+        const patterns = latest.discovered_patterns || [];
+
+        // Extrair todos os pontos (Support Percentage, Quality Score, ID)
+        let allPoints = patterns.map(p => ({
+            x: (p.attributes.support_percentage || ((p.attributes.support || 0) / 10)),
+            y: p.quality_score || 0,
+            id: p.id
+        }));
+
+        // Sort por X (asc), e depois Y (asc)
+        allPoints.sort((a, b) => {
+            if (a.x !== b.x) return a.x - b.x;
+            return a.y - b.y;
+        });
+
+        // Computar a Fronteira de Pareto (Max(X) e Max(Y))
+        let paretoFrontier = [];
+        let max_y = -Infinity;
+        // Percorremos da direita (maior X) para a esquerda (menor X)
+        for (let i = allPoints.length - 1; i >= 0; i--) {
+            if (allPoints[i].y >= max_y) {
+                // É ótimo ou igual ao ótimo (não-dominado)
+                paretoFrontier.push(allPoints[i]);
+                max_y = allPoints[i].y;
+            }
+        }
+        // Inverte para ficar ordenado da esquerda (menor X) para direita (maior X) para o traçado de linha
+        paretoFrontier.reverse();
 
         const option = {
             title: {
@@ -830,7 +1249,7 @@ class ParetoFrontier extends BaseVisualizer {
                     return `<div style="font-size: 11px; padding: 4px; line-height: 1.5;">
                         <strong style="color: #60a5fa; font-size: 12px;">Pattern: ${val[2]}</strong><br/>
                         <strong>Support (Coverage):</strong> ${val[0].toFixed(2)}%<br/>
-                        <strong>Subgroup Quality:</strong> ${val[1].toFixed(4)}
+                        <strong>Quality Score (φ):</strong> ${val[1].toFixed(4)}
                     </div>`;
                 }
             },
@@ -845,7 +1264,7 @@ class ParetoFrontier extends BaseVisualizer {
             },
             yAxis: {
                 type: 'value',
-                name: 'Subgroup Quality',
+                name: 'Quality Score (φ)',
                 nameLocation: 'middle',
                 nameGap: 30,
                 axisLine: { lineStyle: { color: '#3f3f46' } },
@@ -855,14 +1274,21 @@ class ParetoFrontier extends BaseVisualizer {
             grid: { left: '12%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
             series: [
                 {
+                    name: 'All Discovered Slices',
+                    type: 'scatter',
+                    data: allPoints.map(p => [p.x, p.y, p.id]),
+                    symbolSize: 6,
+                    itemStyle: { color: '#71717a', opacity: 0.4 } // Baixa opacidade
+                },
+                {
                     name: 'Pareto Frontier',
                     type: 'line',
-                    data: pareto.map(p => [p.support_percentage, p.quality, p.descriptor]),
+                    data: paretoFrontier.map(p => [p.x, p.y, p.id]),
                     lineStyle: { color: '#ef4444', width: 2 },
                     symbol: 'circle',
                     symbolSize: 8,
-                    itemStyle: { color: '#3b82f6', borderColor: '#60a5fa', borderWidth: 1.5 },
-                    smooth: true
+                    itemStyle: { color: '#ef4444', borderColor: '#fca5a5', borderWidth: 1.5 },
+                    smooth: false // Pareto real costuma ser em ângulos retos ou retas, mas vamos deixar false para não extrapolar a matemática
                 }
             ]
         };
@@ -900,6 +1326,38 @@ class FeatureImportance extends BaseVisualizer {
         `;
     }
 
+    getInsight() {
+        const snapshots = this.data?.snapshots || [];
+        if (snapshots.length === 0) {
+            return {
+                what: "Feature Importance (Tree Frequency)",
+                why: "Identifica quais características ou APIs são mais frequentes nos nós que levam à descoberta de fatias (slices) problemáticas.",
+                current: "Aguardando dados de features."
+            };
+        }
+        
+        const latest = snapshots[snapshots.length - 1];
+        const importance = latest.global_metrics?.feature_importance || {};
+        const entries = Object.entries(importance);
+        
+        if (entries.length === 0) {
+            return {
+                what: "Feature Importance (Tree Frequency)",
+                why: "Identifica quais características são predominantes nos melhores nós da árvore de busca.",
+                current: "Nenhuma feature identificada no top 5% dos nós."
+            };
+        }
+        
+        const topFeature = entries.reduce((prev, curr) => (curr[1] > prev[1]) ? curr : prev);
+        const ratio = Math.min((topFeature[1] * 100), 100).toFixed(1);
+
+        return {
+            what: "Feature Importance (Tree Frequency)",
+            why: "Mede a prevalência de atributos nas regras que formam os piores ou melhores subgrupos. Características muito prevalentes costumam ser as 'causas-raiz'.",
+            current: `A característica '${topFeature[0]}' está presente em ${ratio}% das regras associadas aos nós de maior qualidade.`
+        };
+    }
+
     render() {
         const snapshots = this.data?.snapshots || [];
         if (snapshots.length === 0) return;
@@ -909,15 +1367,9 @@ class FeatureImportance extends BaseVisualizer {
         // Sort items by importance ascending for vertical rendering bottom-to-top
         const sortedItems = Object.entries(importance).sort((a, b) => a[1] - b[1]);
         const yData = sortedItems.map(item => item[0]);
-        const xData = sortedItems.map(item => item[1]);
+        const xData = sortedItems.map(item => Math.min(item[1], 1.0));
 
         const option = {
-            title: {
-                text: 'Feature Importance (Tree Frequency)',
-                left: 'center',
-                top: 10,
-                textStyle: { color: '#e4e4e7', fontSize: 14, fontWeight: 'normal' }
-            },
             tooltip: {
                 trigger: 'axis',
                 backgroundColor: '#18181b',
@@ -946,9 +1398,13 @@ class FeatureImportance extends BaseVisualizer {
                 type: 'category',
                 data: yData,
                 axisLine: { lineStyle: { color: '#3f3f46' } },
-                axisLabel: { color: '#a1a1a6', fontSize: 10 }
+                axisLabel: { 
+                    color: '#a1a1a6', 
+                    fontSize: 10,
+                    formatter: (val) => val.length > 20 ? val.substring(0, 20) + '...' : val
+                }
             },
-            grid: { left: '20%', right: '8%', bottom: '15%', top: '15%', containLabel: true },
+            grid: { left: 130, right: '8%', bottom: '15%', top: '5%', containLabel: false },
             series: [
                 {
                     name: 'Prevalence',
@@ -1460,42 +1916,68 @@ class PatternDetailsPanel {
                     </div>
                     
                     <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-                        <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider block mb-3">Sequential Trajectory Flow</span>
-                        <div class="flex flex-wrap items-center gap-2">
-                            ${(selectedPattern.example_slice?.sequence || []).map((step, idx) => {
-                                const isFirst = idx === 0;
-                                const itemsetHtml = step.itemset.map(item => `
-                                    <span class="px-2 py-0.5 bg-blue-950 text-blue-300 border border-blue-800 rounded text-[10px] font-mono">
-                                        ${item}
-                                    </span>
-                                `).join('');
-                                
-                                const gapHtml = isFirst ? '' : `
-                                    <div class="flex items-center gap-1 text-zinc-550 text-[10px] px-1 font-mono">
-                                        <svg class="w-4 h-3 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 8l4 4m0 0l-4 4m4-4H3"></path>
-                                        </svg>
-                                        <span class="bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-700 text-[9px] text-zinc-400">
-                                            gap ≤ ${step.gap_before}
+                        ${window.app?.domain === 'toxicity' ? `
+                            <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider block mb-1">Interactive Word Attribution (Integrated Gradients)</span>
+                            <span class="text-[10px] text-zinc-500 block mb-3">Highlighted by attribution weight. Red indicates toxic contribution; blue/green indicates safe/negative contribution. Hover for full attribution weight.</span>
+                            <div class="p-3 bg-zinc-950 border border-zinc-850 rounded-lg flex flex-wrap gap-1.5 leading-relaxed">
+                                ${(selectedPattern.example_slice?.word_attributions || []).map(item => {
+                                    const word = item[0];
+                                    const weight = item[1];
+                                    const absWeight = Math.abs(weight);
+                                    const opacity = Math.min(0.7, absWeight);
+                                    const bgColor = weight > 0 ? `rgba(239, 68, 68, ${opacity})` : `rgba(59, 130, 246, ${opacity})`;
+                                    const borderColor = weight > 0 ? `rgba(248, 113, 113, ${Math.min(0.9, opacity + 0.15)})` : `rgba(96, 165, 250, ${Math.min(0.9, opacity + 0.15)})`;
+                                    const labelColorClass = weight > 0 ? 'text-red-200' : 'text-blue-200';
+                                    return `
+                                        <span class="inline-flex items-center px-2 py-1 mx-0.5 my-0.5 rounded border text-xs cursor-help transition-all hover:scale-105"
+                                              style="background-color: ${bgColor}; border-color: ${borderColor};"
+                                              title="Word: '${word}' | Attribution: ${weight > 0 ? '+' : ''}${weight.toFixed(4)}">
+                                            <span class="text-zinc-100 font-medium">${word}</span>
+                                            <span class="ml-1.5 text-[9px] font-bold font-mono opacity-80 ${labelColorClass}">
+                                                ${weight > 0 ? '+' : ''}${weight.toFixed(2)}
+                                            </span>
                                         </span>
-                                        <svg class="w-4 h-3 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 8l4 4m0 0l-4 4m4-4H3"></path>
-                                        </svg>
-                                    </div>
-                                `;
-                                return `
-                                    ${gapHtml}
-                                    <div class="flex items-center bg-zinc-950 border border-zinc-800 rounded-lg p-2 gap-1.5">
-                                        <div class="w-4 h-4 bg-blue-800 rounded-full flex items-center justify-center text-[9px] font-bold text-white">
-                                            ${idx + 1}
+                                    `;
+                                }).join('')}
+                            </div>
+                        ` : `
+                            <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider block mb-3">Sequential Trajectory Flow</span>
+                            <div class="flex flex-wrap items-center gap-2">
+                                ${(selectedPattern.example_slice?.sequence || []).map((step, idx) => {
+                                    const isFirst = idx === 0;
+                                    const itemsetHtml = step.itemset.map(item => `
+                                        <span class="px-2 py-0.5 bg-blue-950 text-blue-300 border border-blue-800 rounded text-[10px] font-mono">
+                                            ${item}
+                                        </span>
+                                    `).join('');
+                                    
+                                    const gapHtml = isFirst ? '' : `
+                                        <div class="flex items-center gap-1 text-zinc-550 text-[10px] px-1 font-mono">
+                                            <svg class="w-4 h-3 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 8l4 4m0 0l-4 4m4-4H3"></path>
+                                            </svg>
+                                            <span class="bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-700 text-[9px] text-zinc-400">
+                                                gap ≤ ${step.gap_before}
+                                            </span>
+                                            <svg class="w-4 h-3 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M17 8l4 4m0 0l-4 4m4-4H3"></path>
+                                            </svg>
                                         </div>
-                                        <div class="flex flex-wrap gap-1">
-                                            ${itemsetHtml}
+                                    `;
+                                    return `
+                                        ${gapHtml}
+                                        <div class="flex items-center bg-zinc-950 border border-zinc-800 rounded-lg p-2 gap-1.5">
+                                            <div class="w-4 h-4 bg-blue-800 rounded-full flex items-center justify-center text-[9px] font-bold text-white">
+                                                ${idx + 1}
+                                            </div>
+                                            <div class="flex flex-wrap gap-1">
+                                                ${itemsetHtml}
+                                            </div>
                                         </div>
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `}
                     </div>
                     
                     <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
@@ -1757,6 +2239,10 @@ class AuditLensApp {
         this.remainingBudget = 0.0;
         this.currentWeights = {};
         this.interactedFields = new Set();
+        this.domain = 'malware';
+        this.dynamicParameters = [];
+        this.dynamicValidationErrors = {};
+        this.visibleChartsState = {};
  
         this.initializeVisualizers();
         this.initializeEventListeners();
@@ -1767,8 +2253,6 @@ class AuditLensApp {
     }
 
     initializeVisualizers() {
-        this.registry.register('quality-scatter', QualityScatter);
-        this.registry.register('error-distribution', ErrorDistribution);
         this.registry.register('search-metrics-kpi', SearchMetricsKPI);
         this.registry.register('metrics-evolution', MetricsEvolution);
         this.registry.register('class-balance-pie', ClassBalancePie);
@@ -1776,22 +2260,34 @@ class AuditLensApp {
         // New visualizers
         this.registry.register('convergence-chart', ConvergenceChart);
         this.registry.register('bubble-chart', BubbleChartViz);
-        this.registry.register('contrast-kde', ContrastKDEChart);
+        // Removed ContrastKDEChart, QualityScatter, ErrorDistribution (old)
+        this.registry.register('tradeoff-scatter', TradeoffScatter);
+        this.registry.register('quality-radar', QualityDecompositionRadar);
+        this.registry.register('error-distribution-true', SoftErrorDistribution);
         this.registry.register('tree-diagnostics', MCTSDiagnosticsPanel);
         this.registry.register('pattern-details', PatternDetailsPanel);
         this.registry.register('pareto-frontier', ParetoFrontier);
         this.registry.register('feature-importance', FeatureImportance);
         this.registry.register('depth-histogram', DepthHistogram);
+        this.registry.register('subsequence-importance', SubsequenceImportanceHeatmap);
+        this.registry.register('sequence-embeddings', SequenceEmbeddingScatter);
+        this.registry.register('identity-error-matrix', IdentityFacetedErrorMatrix);
+        this.registry.register('problematic-slices', ProblematicSliceDiscoveryPanel);
 
         const chartConfigs = [
-            { id: 'quality-scatter', elementId: 'chart-metrics' },
-            { id: 'error-distribution', elementId: 'chart-quality' },
+            { id: 'tradeoff-scatter', elementId: 'chart-tradeoff-map' },
+            { id: 'quality-radar', elementId: 'chart-quality-radar' },
+            { id: 'error-distribution-true', elementId: 'chart-error-distribution' },
             { id: 'search-metrics-kpi', elementId: 'kpi-section' },
             { id: 'tree-diagnostics', elementId: 'tree-diagnostics-container' },
             { id: 'pattern-details', elementId: 'pattern-details-container' },
             { id: 'pareto-frontier', elementId: 'chart-pareto' },
             { id: 'feature-importance', elementId: 'chart-feature-importance' },
-            { id: 'depth-histogram', elementId: 'chart-depth-histogram' }
+            { id: 'depth-histogram', elementId: 'chart-depth-histogram' },
+            { id: 'subsequence-importance', elementId: 'chart-subsequence-importance' },
+            { id: 'sequence-embeddings', elementId: 'chart-sequence-embeddings' },
+            { id: 'identity-error-matrix', elementId: 'chart-identity-error-matrix' },
+            { id: 'problematic-slices', elementId: 'chart-problematic-slices' }
         ];
 
         chartConfigs.forEach(config => {
@@ -1803,8 +2299,88 @@ class AuditLensApp {
         });
     }
 
+    updateDomainVisibility() {
+        const domain = this.domain || 'malware';
+        const malwareElements = document.querySelectorAll('.malware-only');
+        const toxicityElements = document.querySelectorAll('.toxicity-only');
+        
+        malwareElements.forEach(el => {
+            if (domain === 'malware') {
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        });
+        
+        toxicityElements.forEach(el => {
+            if (domain === 'toxicity') {
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        });
+
+        // Trigger chart resizes after visibility changes
+        setTimeout(() => {
+            this.visualizers.forEach(v => {
+                if (v && v.chart && typeof v.chart.resize === 'function') {
+                    v.chart.resize();
+                }
+                if (v && typeof v.resize === 'function') {
+                    v.resize();
+                }
+            });
+        }, 150);
+    }
+
     initializeEventListeners() {
         console.log('Initializing event listeners...');
+        
+        // Setup Form submission & initial orchestration
+        const setupForm = document.getElementById('setup-form');
+        if (setupForm) {
+            setupForm.addEventListener('submit', (e) => this.handleSetupSubmit(e));
+        }
+        
+        // Connection verification
+        const connectServerBtn = document.getElementById('btn-connect-server');
+        if (connectServerBtn) {
+            connectServerBtn.addEventListener('click', () => this.verifyModelServerConnection());
+        }
+        
+        // Drag and Drop Zone styling & events
+        const dragZone = document.getElementById('upload-drag-zone');
+        const fileInput = document.getElementById('setup-file-input');
+        const uploadText = document.getElementById('upload-text');
+        
+        if (dragZone && fileInput && uploadText) {
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    uploadText.textContent = `File selected: ${e.target.files[0].name}`;
+                    dragZone.classList.add('border-blue-500');
+                }
+            });
+            
+            dragZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dragZone.classList.add('border-blue-500', 'bg-zinc-800/40');
+            });
+            
+            dragZone.addEventListener('dragleave', () => {
+                dragZone.classList.remove('border-blue-500', 'bg-zinc-800/40');
+            });
+            
+            dragZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dragZone.classList.remove('border-blue-500', 'bg-zinc-800/40');
+                if (e.dataTransfer.files.length > 0) {
+                    fileInput.files = e.dataTransfer.files;
+                    uploadText.textContent = `File dropped: ${e.dataTransfer.files[0].name}`;
+                    dragZone.classList.add('border-blue-500');
+                }
+            });
+        }
+
         const startBtn = document.getElementById('btn-start-audit');
         if (startBtn) {
             startBtn.addEventListener('click', () => {
@@ -1974,14 +2550,15 @@ class AuditLensApp {
             btnFilter.addEventListener('click', () => this.fetchLogs());
         }
 
-        // Bind close buttons of existing cards
-        document.querySelectorAll('.btn-close-chart').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const container = e.target.closest('.chart-container');
+        // Use event delegation on document.body for ALL close buttons
+        document.body.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-close-chart');
+            if (btn) {
+                const container = btn.closest('.chart-container');
                 if (container) {
                     this.removeChart(container);
                 }
-            });
+            }
         });
 
         // Make existing cards draggable
@@ -2060,9 +2637,15 @@ class AuditLensApp {
             this.remainingBudget = data.remaining_budget || 0.0;
             this.currentStatus = data.status || 'idle';
             this.currentWeights = data.weights || {};
+            this.domain = data.domain || 'malware';
             
-            // Update sidebar fields to match config (disabled for neutral initialization)
-            // this.populateConfigFields(data);
+            // Toggle view visibility depending on currentStatus
+            this.toggleViewMode(this.currentStatus);
+            this.updateDomainVisibility();
+            
+            if (this.currentStatus !== 'idle') {
+                await this.renderSidebarDynamicForm(data);
+            }
             
             // Trigger KPI update
             this.updateMetrics();
@@ -2071,59 +2654,24 @@ class AuditLensApp {
         }
     }
 
-    populateConfigFields(data) {
-        if (!data) return;
-        const setVal = (id, val) => {
-            const el = document.getElementById(id);
-            if (el) el.value = val;
-        };
-        const setHtml = (id, val) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = val;
-        };
-        
-        if (data.budgets && data.budgets.search !== undefined) {
-            setVal('search-budget', data.budgets.search);
+    async renderSidebarDynamicForm(currentConfig) {
+        if (!this.dynamicParameters || this.dynamicParameters.length === 0) {
+            const url = currentConfig.model_server_url || document.getElementById('setup-model-url').value.trim();
+            if (url) {
+                try {
+                    const res = await fetch(`/api/control/check-health?url=${encodeURIComponent(url)}`);
+                    const checkData = await res.json();
+                    if (checkData.online && checkData.metadata) {
+                        this.dynamicParameters = checkData.metadata.parameters || [];
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch metadata for sidebar:', e);
+                }
+            }
         }
         
-        const useMockCheckbox = document.getElementById('use-mock');
-        if (useMockCheckbox && data.use_mock !== undefined) {
-            useMockCheckbox.checked = data.use_mock;
-        }
-        
-        if (data.explore) {
-            setVal('subgroups-explore', data.explore.join(', '));
-        }
-        if (data.ignore) {
-            setVal('subgroups-ignore', data.ignore.join(', '));
-        }
-        if (data.weights && Object.keys(data.weights).length > 0) {
-            setVal('weights-input', JSON.stringify(data.weights));
-        } else {
-            setVal('weights-input', '');
-        }
-        
-        if (data.max_gap !== undefined) {
-            setVal('max-gap', data.max_gap);
-            setHtml('max-gap-val', data.max_gap);
-        }
-        if (data.gamma !== undefined) {
-            setVal('gamma', data.gamma);
-            setHtml('gamma-val', data.gamma.toFixed(2));
-        }
-        if (data.min_support !== undefined) {
-            setVal('min-support', data.min_support);
-        }
-        if (data.min_count_class !== undefined) {
-            setVal('min-count-class', data.min_count_class);
-        }
-        if (data.uct_factor !== undefined) {
-            setVal('uct-factor', data.uct_factor);
-            setHtml('uct-factor-val', data.uct_factor.toFixed(2));
-        }
-        if (data.jaccard_threshold !== undefined) {
-            setVal('jaccard-threshold', data.jaccard_threshold);
-            setHtml('jaccard-threshold-val', data.jaccard_threshold.toFixed(2));
+        if (this.dynamicParameters && this.dynamicParameters.length > 0) {
+            this.renderDynamicForm(this.dynamicParameters, 'sidebar-dynamic-fields', 'sidebar-dyn-', true, currentConfig);
         }
     }
 
@@ -2132,31 +2680,13 @@ class AuditLensApp {
         const configForm = document.getElementById('config-form');
         if (!configForm) return;
         const formData = new FormData(configForm);
-        const useMockCheckbox = document.getElementById('use-mock');
         
         const config = {};
         
-        const shouldSend = (name, isSlider = false) => {
+        const shouldSend = (name) => {
             const value = formData.get(name);
-            if (isSlider) {
-                return this.interactedFields && this.interactedFields.has(name) && value !== null && value !== undefined && value.trim() !== '';
-            }
             return value !== null && value !== undefined && value.trim() !== '';
         };
-
-        // Budgets
-        if (shouldSend('search_budget')) {
-            config.budgets = { 'search': parseFloat(formData.get('search_budget')) };
-        } else {
-            config.budgets = null;
-        }
-
-        // Use mock
-        if (this.interactedFields && this.interactedFields.has('use_mock') && useMockCheckbox) {
-            config.use_mock = useMockCheckbox.checked;
-        } else {
-            config.use_mock = null;
-        }
 
         // Subgroups explore
         if (shouldSend('subgroups_explore')) {
@@ -2191,60 +2721,54 @@ class AuditLensApp {
             config.weights = null;
         }
 
-        // Max Gap
-        if (shouldSend('max_gap', true)) {
-            config.max_gap = parseInt(formData.get('max_gap'));
-        } else {
-            config.max_gap = null;
-        }
+        // Gather dynamic fields from sidebar
+        const paramsList = this.sidebarDynamicParameters || this.dynamicParameters || [];
+        paramsList.forEach(param => {
+            const el = document.getElementById(`sidebar-dyn-${param.name}`);
+            if (!el) return;
+            
+            let val = el.value;
+            if (param.type === 'int') {
+                val = parseInt(val, 10);
+            } else if (param.type === 'float') {
+                val = parseFloat(val);
+            } else if (param.type === 'boolean') {
+                val = (val === 'true');
+            }
+            
+            if (param.name === 'budget') {
+                config.budgets = { 'search': val };
+            } else {
+                config[param.name] = val;
+            }
+        });
 
-        // Gamma
-        if (shouldSend('gamma', true)) {
-            config.gamma = parseFloat(formData.get('gamma'));
-        } else {
-            config.gamma = null;
-        }
-
-        // Min Support
-        if (shouldSend('min_support')) {
-            config.min_support = parseInt(formData.get('min_support'));
-        } else {
-            config.min_support = null;
-        }
-
-        // Min Count Class
-        if (shouldSend('min_count_class')) {
-            config.min_count_class = parseInt(formData.get('min_count_class'));
-        } else {
-            config.min_count_class = null;
-        }
-
-        // UCT Factor
-        if (shouldSend('uct_factor', true)) {
-            config.uct_factor = parseFloat(formData.get('uct_factor'));
-        } else {
-            config.uct_factor = null;
-        }
-
-        // Jaccard Threshold
-        if (shouldSend('jaccard_threshold', true)) {
-            config.jaccard_threshold = parseFloat(formData.get('jaccard_threshold'));
-        } else {
-            config.jaccard_threshold = null;
-        }
-
+        const isPaused = this.currentStatus === 'paused';
         try {
-            const response = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            const result = await response.json();
-            this.addActivityLog('Config submitted');
-            console.log('Config response:', result);
+            if (isPaused) {
+                const response = await fetch('/api/control/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                const result = await response.json();
+                this.addActivityLog('Resume requested with configuration updates');
+                console.log('Resume response:', result);
+                await this.fetchCurrentConfig();
+            } else {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                const result = await response.json();
+                this.addActivityLog('Config submitted');
+                console.log('Config response:', result);
+                await this.fetchCurrentConfig();
+            }
         } catch (error) {
             console.error('Failed to submit config:', error);
-            this.addActivityLog('Config submission failed');
+            this.addActivityLog('Submission failed');
         }
     }
 
@@ -2421,6 +2945,7 @@ class AuditLensApp {
     }
 
     removeChart(container) {
+        let removedKey = null;
         // Find if this container has a visualizer associated with it
         for (const [key, visualizer] of this.visualizers.entries()) {
             if (visualizer && (visualizer.container === container || container.contains(visualizer.container))) {
@@ -2431,12 +2956,18 @@ class AuditLensApp {
                         console.error('Error disposing visualizer:', e);
                     }
                 }
+                removedKey = key;
                 this.visualizers.delete(key);
                 break;
             }
         }
+        
+        if (removedKey) {
+            this.visibleChartsState[removedKey] = false;
+        }
+
         container.remove();
-        this.addActivityLog('Chart removed from layout');
+        this.addActivityLog('Chart state updated: removed from UI');
         
         // Trigger ECharts resize on remaining charts
         setTimeout(() => {
@@ -2719,10 +3250,6 @@ class AuditLensApp {
         if (data.type === 'status') {
             this.updateStatusIndicator(true, data.status);
             this.addActivityLog(`Status: ${data.status} | Slices: ${data.slices_found}`);
-            this.fetchCurrentConfig();
-            if (data.status === 'completed' || data.status === 'paused') {
-                this.fetchLogs();
-            }
         } else if (data.type === 'slice') {
             const slice = data.payload;
             this.metrics.push(slice);
@@ -2766,7 +3293,11 @@ class AuditLensApp {
                 latestMetrics.budget_consumed = this.budgetConsumed || 0.0;
                 visualizer.update(latestMetrics);
             } else {
-                if (key.includes('contrast-kde') || key.includes('tree-diagnostics') || key.includes('pattern-details') || key.includes('quality-scatter') || key.includes('error-distribution') || key.includes('pareto-frontier') || key.includes('feature-importance') || key.includes('depth-histogram') || key.includes('convergence-chart')) {
+                if (key.includes('contrast-kde') || key.includes('tree-diagnostics') || key.includes('pattern-details') || 
+                    key.includes('quality-scatter') || key.includes('error-distribution') || key.includes('pareto-frontier') || 
+                    key.includes('feature-importance') || key.includes('depth-histogram') || key.includes('convergence-chart') ||
+                    key.includes('subsequence-importance') || key.includes('sequence-embeddings') || 
+                    key.includes('identity-error-matrix') || key.includes('problematic-slices')) {
                     visualizer.update(snapshotPayload);
                 } else {
                     visualizer.update(subsetMetrics);
@@ -2826,10 +3357,11 @@ class AuditLensApp {
             const entry = document.createElement('div');
             entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
             entry.className = 'text-zinc-400 text-xs';
-            log.insertBefore(entry, log.firstChild);
-            if (log.children.length > 10) {
-                log.removeChild(log.lastChild);
+            log.appendChild(entry);
+            if (log.children.length > 50) {
+                log.removeChild(log.firstChild);
             }
+            log.scrollTop = log.scrollHeight;
         }
     }
 
@@ -2984,6 +3516,7 @@ class AuditLensApp {
             
             this.updateTimelineExplorer();
             this.updateMetrics();
+            this.toggleViewMode('idle');
             this.addActivityLog('Run logs reset and cleared');
         } catch (e) {
             console.error('Failed to reset run data:', e);
@@ -3045,6 +3578,447 @@ class AuditLensApp {
                 }, 50);
             }
         });
+    }
+
+    toggleViewMode(status) {
+        const setupView = document.getElementById('setup-view');
+        const dashboardView = document.getElementById('dashboard-view');
+        
+        if (!setupView || !dashboardView) return;
+        
+        if (status === 'idle') {
+            setupView.classList.remove('hidden');
+            dashboardView.classList.add('hidden');
+        } else {
+            setupView.classList.add('hidden');
+            dashboardView.classList.remove('hidden');
+            // Trigger chart resizes on show
+            setTimeout(() => {
+                this.visualizers.forEach(v => {
+                    if (v && v.chart && typeof v.chart.resize === 'function') {
+                        v.chart.resize();
+                    }
+                });
+            }, 100);
+        }
+    }
+
+    async verifyModelServerConnection() {
+        const urlInput = document.getElementById('setup-model-url');
+        const badge = document.getElementById('server-status-badge');
+        const errorBox = document.getElementById('connection-error-box');
+        const setupForm = document.getElementById('setup-form');
+        const connectBtn = document.getElementById('btn-connect-server');
+        
+        if (!urlInput || !badge) return;
+        
+        badge.textContent = 'Estabelecendo conexão e lendo metadados...';
+        badge.className = 'text-xs text-amber-500 font-medium';
+        if (errorBox) {
+            errorBox.classList.add('hidden');
+            errorBox.textContent = '';
+        }
+        if (connectBtn) connectBtn.disabled = true;
+        
+        const serverUrl = urlInput.value.trim();
+        if (!serverUrl) {
+            badge.textContent = 'Por favor, insira um endpoint válido.';
+            badge.className = 'text-xs text-red-500 font-medium';
+            if (connectBtn) connectBtn.disabled = false;
+            return;
+        }
+        
+        try {
+            const res = await fetch(`/api/control/check-health?url=${encodeURIComponent(serverUrl)}`);
+            const data = await res.json();
+            
+            if (data.online) {
+                badge.textContent = 'Conexão estabelecida: Servidor do Modelo Ativo.';
+                badge.className = 'text-xs text-green-500 font-medium';
+                
+                // Parse payload parameters and build dynamic form
+                const metadata = data.metadata || { parameters: [] };
+                this.domain = metadata.domain || 'malware';
+                
+                const identitySec = document.getElementById('setup-identity-section');
+                if (identitySec) {
+                    if (this.domain === 'toxicity') {
+                        identitySec.classList.remove('hidden');
+                    } else {
+                        identitySec.classList.add('hidden');
+                    }
+                }
+                
+                this.renderDynamicForm(metadata.parameters);
+                
+                // Transition to Step 2 (unhide form)
+                if (setupForm) {
+                    setupForm.classList.remove('hidden');
+                    setupForm.scrollIntoView({ behavior: 'smooth' });
+                }
+            } else {
+                badge.textContent = 'Falha na conexão.';
+                badge.className = 'text-xs text-red-500 font-medium';
+                if (errorBox) {
+                    errorBox.textContent = data.error || 'Erro de rede ou timeout ao conectar com o modelo.';
+                    errorBox.classList.remove('hidden');
+                }
+                if (setupForm) setupForm.classList.add('hidden');
+            }
+        } catch (err) {
+            badge.textContent = 'Erro de rede ou timeout.';
+            badge.className = 'text-xs text-red-500 font-medium';
+            if (errorBox) {
+                errorBox.textContent = err.message || 'Erro inesperado ao conectar com o modelo.';
+                errorBox.classList.remove('hidden');
+            }
+            if (setupForm) setupForm.classList.add('hidden');
+        } finally {
+            if (connectBtn) connectBtn.disabled = false;
+        }
+    }
+
+    renderDynamicForm(parameters, containerId = 'dynamic-form-fields', idPrefix = 'dyn-', isSidebar = false, currentValues = null) {
+        const fieldsContainer = document.getElementById(containerId);
+        if (!fieldsContainer) return;
+        
+        fieldsContainer.innerHTML = '';
+        if (!isSidebar) {
+            this.dynamicParameters = parameters;
+            this.dynamicValidationErrors = {};
+        } else {
+            this.sidebarDynamicParameters = parameters;
+            this.sidebarValidationErrors = {};
+        }
+        
+        parameters.forEach(param => {
+            const fieldWrapper = document.createElement('div');
+            fieldWrapper.className = 'form-group space-y-1';
+            
+            const labelEl = document.createElement('label');
+            labelEl.className = 'form-label';
+            labelEl.setAttribute('for', `${idPrefix}${param.name}`);
+            labelEl.textContent = param.label || param.name;
+            if (param.required) {
+                const reqSpan = document.createElement('span');
+                reqSpan.className = 'text-red-500 ml-1 font-bold';
+                reqSpan.textContent = '*';
+                labelEl.appendChild(reqSpan);
+            }
+            fieldWrapper.appendChild(labelEl);
+            
+            // Determine active/initial value
+            let val = param.default_value;
+            if (currentValues) {
+                if (currentValues[param.name] !== undefined) {
+                    val = currentValues[param.name];
+                } else if (param.name === 'budget') {
+                    if (currentValues['remaining_budget'] !== undefined) {
+                        val = currentValues['remaining_budget'];
+                    } else if (currentValues['budgets'] && currentValues['budgets']['search'] !== undefined) {
+                        val = currentValues['budgets']['search'];
+                    }
+                }
+            }
+
+            let inputEl;
+            if (param.type === 'enum') {
+                inputEl = document.createElement('select');
+                inputEl.className = 'form-input';
+                const options = (param.constraints && param.constraints.options) || [];
+                options.forEach(opt => {
+                    const optEl = document.createElement('option');
+                    optEl.value = opt;
+                    optEl.textContent = opt;
+                    if (opt === val) optEl.selected = true;
+                    inputEl.appendChild(optEl);
+                });
+            } else if (param.type === 'boolean') {
+                inputEl = document.createElement('select');
+                inputEl.className = 'form-input';
+                
+                const optTrue = document.createElement('option');
+                optTrue.value = 'true';
+                optTrue.textContent = 'True';
+                if (val === true || val === 'true') optTrue.selected = true;
+                
+                const optFalse = document.createElement('option');
+                optFalse.value = 'false';
+                optFalse.textContent = 'False';
+                if (val === false || val === 'false') optFalse.selected = true;
+                
+                inputEl.appendChild(optTrue);
+                inputEl.appendChild(optFalse);
+            } else {
+                inputEl = document.createElement('input');
+                inputEl.className = 'form-input';
+                inputEl.setAttribute('id', `${idPrefix}${param.name}`);
+                
+                if (param.type === 'int' || param.type === 'float') {
+                    inputEl.setAttribute('type', 'number');
+                    if (param.type === 'float') {
+                        inputEl.setAttribute('step', 'any');
+                    }
+                    if (param.constraints) {
+                        if (param.constraints.min !== undefined) inputEl.setAttribute('min', param.constraints.min);
+                        if (param.constraints.max !== undefined) inputEl.setAttribute('max', param.constraints.max);
+                    }
+                } else {
+                    inputEl.setAttribute('type', 'text');
+                }
+                
+                if (val !== undefined && val !== null) {
+                    inputEl.value = val;
+                }
+            }
+            
+            inputEl.setAttribute('name', param.name);
+            inputEl.setAttribute('id', `${idPrefix}${param.name}`);
+            
+            // Handle editable vs fixed fields based on 'modifiable' property
+            if (isSidebar && param.modifiable === false && param.name !== 'budget') {
+                inputEl.disabled = true;
+                inputEl.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+            
+            const errorMsgEl = document.createElement('span');
+            errorMsgEl.className = 'text-[10px] text-red-500 hidden block mt-1 font-mono';
+            errorMsgEl.setAttribute('id', `${idPrefix}err-${param.name}`);
+            
+            const validate = () => this.validateField(param, inputEl, errorMsgEl, isSidebar);
+            inputEl.addEventListener('input', validate);
+            inputEl.addEventListener('change', validate);
+            
+            fieldWrapper.appendChild(inputEl);
+            fieldWrapper.appendChild(errorMsgEl);
+            
+            fieldsContainer.appendChild(fieldWrapper);
+            
+            // Initial validation run to populate required state if empty
+            validate();
+        });
+    }
+
+    validateField(param, inputEl, errorMsgEl, isSidebar = false) {
+        let value = inputEl.value;
+        let isValid = true;
+        let errorMsg = '';
+        
+        if (param.required && (value === undefined || value === null || value.trim() === '')) {
+            isValid = false;
+            errorMsg = 'Campo obrigatório.';
+        } else if (value.trim() !== '') {
+            if (param.type === 'int') {
+                const parsed = parseInt(value, 10);
+                if (isNaN(parsed) || parsed.toString() !== value.trim()) {
+                    isValid = false;
+                    errorMsg = 'Deve ser um número inteiro.';
+                } else if (param.constraints) {
+                    if (param.constraints.min !== undefined && parsed < param.constraints.min) {
+                        isValid = false;
+                        errorMsg = `Valor mínimo permitido é ${param.constraints.min}.`;
+                    }
+                    if (param.constraints.max !== undefined && parsed > param.constraints.max) {
+                        isValid = false;
+                        errorMsg = `Valor máximo permitido é ${param.constraints.max}.`;
+                    }
+                }
+            } else if (param.type === 'float') {
+                const parsed = parseFloat(value);
+                if (isNaN(parsed)) {
+                    isValid = false;
+                    errorMsg = 'Deve ser um número de ponto flutuante.';
+                } else if (param.constraints) {
+                    if (param.constraints.min !== undefined && parsed < param.constraints.min) {
+                        isValid = false;
+                        errorMsg = `Valor mínimo permitido é ${param.constraints.min}.`;
+                    }
+                    if (param.constraints.max !== undefined && parsed > param.constraints.max) {
+                        isValid = false;
+                        errorMsg = `Valor máximo permitido é ${param.constraints.max}.`;
+                    }
+                }
+            }
+        }
+        
+        const errorsObj = isSidebar ? this.sidebarValidationErrors : this.dynamicValidationErrors;
+        
+        if (isValid) {
+            errorMsgEl.textContent = '';
+            errorMsgEl.classList.add('hidden');
+            delete errorsObj[param.name];
+        } else {
+            errorMsgEl.textContent = errorMsg;
+            errorMsgEl.classList.remove('hidden');
+            errorsObj[param.name] = errorMsg;
+        }
+        
+        if (!isSidebar) {
+            const initBtn = document.getElementById('btn-initialize-pipeline');
+            if (initBtn) {
+                const hasErrors = Object.keys(this.dynamicValidationErrors).length > 0;
+                initBtn.disabled = hasErrors;
+                if (hasErrors) {
+                    initBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                } else {
+                    initBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            }
+        } else {
+            const submitBtn = document.querySelector('#config-form button[type="submit"]');
+            if (submitBtn) {
+                const hasErrors = Object.keys(this.sidebarValidationErrors).length > 0;
+                submitBtn.disabled = hasErrors;
+                if (hasErrors) {
+                    submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                } else {
+                    submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            }
+        }
+    }
+
+    async handleSetupSubmit(e) {
+        if (e) e.preventDefault();
+        
+        const initBtn = document.getElementById('btn-initialize-pipeline');
+        const origText = initBtn ? initBtn.textContent : '';
+        if (initBtn) {
+            initBtn.disabled = true;
+            initBtn.textContent = 'Initializing Audit pipeline...';
+        }
+        
+        // Show premium initialization overlay
+        let loadingOverlay = document.createElement('div');
+        loadingOverlay.id = 'initializing-overlay';
+        loadingOverlay.className = 'fixed inset-0 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center justify-center z-50 transition-opacity duration-300';
+        loadingOverlay.innerHTML = `
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl">
+                <div class="relative w-16 h-16 mx-auto">
+                    <div class="absolute inset-0 rounded-full border-4 border-blue-500/20"></div>
+                    <div class="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent animate-spin"></div>
+                </div>
+                <div class="space-y-1">
+                    <h3 class="text-sm font-bold text-zinc-105 uppercase tracking-wider">Inicializando Análise...</h3>
+                    <p class="text-xs text-zinc-400">Compilando parâmetros e instanciando pipeline MCTS</p>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(loadingOverlay);
+        
+        try {
+            const form = document.getElementById('setup-form');
+            const formData = new FormData(form);
+            
+            const domain = this.domain || 'malware';
+            const modelServerUrl = document.getElementById('setup-model-url').value.trim();
+            const datasetPath = formData.get('setup_dataset_path');
+            const isSimulatorUrl = (
+                modelServerUrl.includes('/api/mock-model') ||
+                modelServerUrl.includes('/api/simulator/handshake') ||
+                modelServerUrl.includes('/api/mock-model-server')
+            );
+            const useMock = isSimulatorUrl;
+            
+            const identityFilters = [];
+            const identityBoxes = document.querySelectorAll('input[name="setup_identities"]:checked');
+            identityBoxes.forEach(box => {
+                identityFilters.push(box.value);
+            });
+            
+            // Compile dynamic configuration parameters
+            const advancedParams = {};
+            let searchBudget = 120.0;
+            if (this.dynamicParameters) {
+                this.dynamicParameters.forEach(param => {
+                    const el = document.getElementById(`dyn-${param.name}`);
+                    if (!el) return;
+                    
+                    let val = el.value;
+                    if (param.type === 'int') {
+                        val = parseInt(val, 10);
+                    } else if (param.type === 'float') {
+                        val = parseFloat(val);
+                    } else if (param.type === 'boolean') {
+                        val = (val === 'true');
+                    }
+                    
+                    if (param.name === 'budget') {
+                        searchBudget = val;
+                        advancedParams.budgets = { search: val };
+                    } else {
+                        advancedParams[param.name] = val;
+                    }
+                });
+            }
+            
+            const postData = new FormData();
+            postData.append('model_server_url', modelServerUrl);
+            postData.append('domain', domain);
+            if (datasetPath) {
+                postData.append('dataset_path', datasetPath);
+            }
+            postData.append('use_mock', useMock);
+            postData.append('identity_filters_json', JSON.stringify(identityFilters));
+            postData.append('config_params_json', JSON.stringify(advancedParams));
+            
+            const fileInput = document.getElementById('setup-file-input');
+            if (fileInput && fileInput.files.length > 0) {
+                postData.append('file', fileInput.files[0]);
+            }
+            
+            const res = await fetch('/api/initialize', {
+                method: 'POST',
+                body: postData
+            });
+            
+            const result = await res.json();
+            
+            if (result.status === 'error') {
+                this.addActivityLog(`Initialization error: ${result.message}`);
+                alert(`Error initializing pipeline: ${result.message}`);
+                if (loadingOverlay) loadingOverlay.remove();
+                return;
+            }
+            
+            this.domain = domain;
+            this.updateDomainVisibility();
+            
+            this.addActivityLog(`Audit pipeline initialized on domain: ${domain.toUpperCase()}`);
+            this.addActivityLog(`Mode: ${result.use_mock ? 'Simulation' : 'Orchestrated Model Server'}`);
+            
+            this.snapshots = [];
+            this.metrics = [];
+            this.currentExploreIteration = null;
+            this.budgetConsumed = 0.0;
+            this.remainingBudget = searchBudget;
+            
+            // Fade out overlay and transition to dashboards view
+            setTimeout(() => {
+                if (loadingOverlay) {
+                    loadingOverlay.style.opacity = '0';
+                    setTimeout(() => loadingOverlay.remove(), 300);
+                }
+                this.toggleViewMode('running');
+            }, 800);
+            
+            if (!this.wsManager || this.wsManager.ws.readyState !== WebSocket.OPEN) {
+                this.connectWebSocket();
+            } else {
+                this.fetchCurrentConfig();
+            }
+            
+        } catch (err) {
+            console.error('Failed to initialize audit setup:', err);
+            this.addActivityLog('Audit pipeline initialization failed.');
+            alert('Failed to initialize pipeline. Check connection settings and console logs.');
+            if (loadingOverlay) loadingOverlay.remove();
+        } finally {
+            if (initBtn) {
+                initBtn.disabled = false;
+                initBtn.textContent = origText;
+            }
+        }
     }
 }
 

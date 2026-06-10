@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -8,9 +8,24 @@ import asyncio
 import random
 import math
 from datetime import datetime, timezone
-from typing import Set
+from typing import Set, Optional, List, Dict
 from pathlib import Path
 from models import Slice, ConfigParameters, SearchMetrics, ConsumeRequest, RunStatus
+from data_loaders import MalwareDataLoader, ToxicityDataLoader
+from orchestrator import ModelOrchestrator
+import logging
+
+logger = logging.getLogger("audit_transmission")
+logger.setLevel(logging.INFO)
+
+file_handler = logging.FileHandler("audit_transmission.log", encoding="utf-8")
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 class ConnectionManager:
@@ -58,6 +73,10 @@ class ConfigurationState:
         self.min_count_class: int = 5
         self.uct_factor: float = 1.2
         self.jaccard_threshold: float = 0.3
+        self.model_server_url: str = "http://localhost:8002"
+        self.domain: str = "malware"
+        self.dataset_path: Optional[str] = None
+        self.identity_filters: List[str] = []
     
     def update(self, config: ConfigParameters):
         """Update configuration from API."""
@@ -87,6 +106,14 @@ class ConfigurationState:
             self.uct_factor = config.uct_factor
         if config.jaccard_threshold is not None:
             self.jaccard_threshold = config.jaccard_threshold
+        if config.model_server_url is not None:
+            self.model_server_url = config.model_server_url
+        if config.domain is not None:
+            self.domain = config.domain
+        if config.dataset_path is not None:
+            self.dataset_path = config.dataset_path
+        if config.identity_filters is not None:
+            self.identity_filters = config.identity_filters
     
     def get_remaining_budget(self) -> float:
         """Get remaining search budget."""
@@ -165,16 +192,55 @@ def generate_mock_pattern(pid: int, config_state: ConfigurationState) -> dict:
     phi_raw = (separation * deviation) * (class_balance * support_penalty)
     quality = 1.0 / (1.0 + math.exp(-3.0 * phi_raw))
     
-    items_pool = [
-        ["device=Mobile", "device=Desktop", "device=Tablet"],
-        ["browser=Chrome", "browser=Safari", "browser=Firefox"],
-        ["country=US", "country=BR", "country=DE", "country=JP"],
-        ["page=Checkout", "page=Cart", "page=Home"],
-        ["action=Search", "action=Add", "action=Buy"]
-    ]
+    word_attributions = []
+    embedding_coords = [0.0, 0.0]
+    
+    if config_state.domain == "malware":
+        items_pool = [
+            ["API=RegOpenKeyEx", "API=RegSetValueEx", "API=RegQueryValueEx"],
+            ["API=CreateFileW", "API=ReadFile", "API=WriteFile", "API=DeleteFileW"],
+            ["API=socket", "API=connect", "API=send", "API=recv"],
+            ["API=CreateProcessW", "API=OpenProcess", "API=VirtualAllocEx"]
+        ]
+        # Generate semantic cluster coordinate for sequence embeddings
+        cluster = random.choice([0, 1, 2, 3]) # registry, file, network, process cluster
+        if cluster == 0: # registry
+            embedding_coords = [random.gauss(-4.0, 1.2), random.gauss(-3.0, 1.2)]
+        elif cluster == 1: # file
+            embedding_coords = [random.gauss(4.0, 1.2), random.gauss(3.0, 1.2)]
+        elif cluster == 2: # network
+            embedding_coords = [random.gauss(-3.0, 1.2), random.gauss(4.0, 1.2)]
+        else: # process
+            embedding_coords = [random.gauss(3.0, 1.2), random.gauss(-4.0, 1.2)]
+    else:
+        items_pool = [
+            ["identity=female", "identity=male"],
+            ["identity=homosexual_gay_or_lesbian", "identity=heterosexual"],
+            ["context=politics", "context=social_media", "context=news"],
+            ["target=toxic", "target=nontoxic"]
+        ]
+        if config_state.identity_filters:
+            active_filters = []
+            if "female" in config_state.identity_filters:
+                active_filters.append("identity=female (100% women context)")
+            if "sexual_orientation" in config_state.identity_filters:
+                active_filters.append("identity=gay_or_lesbian (100% sexual orientation context)")
+            if active_filters:
+                items_pool.insert(0, active_filters)
+        
+        # Word attributions for Integrated Gradients
+        comments_pool = [
+            ("This is stupid and wrong, go away.", [("This", 0.01), ("is", 0.02), ("stupid", 0.85), ("and", 0.01), ("wrong,", 0.42), ("go", 0.15), ("away.", 0.22)]),
+            ("Women should stay out of politics, they are emotional.", [("Women", 0.11), ("should", 0.01), ("stay", 0.05), ("out", 0.02), ("of", -0.01), ("politics,", 0.18), ("they", 0.05), ("are", 0.03), ("emotional.", 0.74)]),
+            ("Gays are destroying traditional values and should be banned.", [("Gays", 0.28), ("are", 0.03), ("destroying", 0.65), ("traditional", 0.12), ("values", -0.02), ("and", 0.01), ("should", 0.05), ("be", 0.01), ("banned.", 0.82)]),
+            ("She is a wonderful doctor and always listens.", [("She", 0.02), ("is", 0.01), ("a", -0.01), ("wonderful", -0.45), ("doctor", -0.08), ("and", -0.01), ("always", -0.12), ("listens.", -0.22)]),
+            ("The parade celebrating gay pride was full of joy.", [("The", -0.01), ("parade", -0.08), ("celebrating", -0.35), ("gay", -0.02), ("pride", -0.42), ("was", 0.01), ("full", -0.15), ("of", 0.0), ("joy.", -0.52)])
+        ]
+        chosen_comment, word_attributions = random.choice(comments_pool)
+                
     length = random.randint(2, 4)
     seq = []
-    selected_pools = random.sample(items_pool, length)
+    selected_pools = random.sample(items_pool, min(length, len(items_pool)))
     for idx_s, pool in enumerate(selected_pools):
         itemset = random.sample(pool, random.randint(1, min(2, len(pool))))
         gap = 0 if idx_s == 0 else random.randint(1, config_state.max_gap)
@@ -182,6 +248,15 @@ def generate_mock_pattern(pid: int, config_state: ConfigurationState) -> dict:
             "itemset": itemset,
             "gap_before": gap
         })
+        
+    desc_parts = []
+    for item in seq:
+        items_str = " & ".join(item["itemset"])
+        if item["gap_before"] > 0:
+            desc_parts.append(f"-[gap={item['gap_before']}]-> ({items_str})")
+        else:
+            desc_parts.append(f"({items_str})")
+    pattern_descriptor = " ".join(desc_parts)
         
     return {
         "id": f"p{pid}",
@@ -199,13 +274,16 @@ def generate_mock_pattern(pid: int, config_state: ConfigurationState) -> dict:
             "mean_error_mu": (mu_0 * count_0 + mu_1 * count_1) / support,
             "std_error_sigma": math.sqrt(max_var),
             "p_value_bh": random.uniform(0.001, 0.05),
-            "support_percentage": (support / 1000.0) * 100.0
+            "support_percentage": (support / 1000.0) * 100.0,
+            "embedding_coords": embedding_coords
         },
         "example_slice": {
             "errors_class_0": errors_class_0,
             "errors_class_1": errors_class_1,
-            "sequence": seq
-        }
+            "sequence": seq,
+            "word_attributions": word_attributions
+        },
+        "pattern_descriptor": pattern_descriptor
     }
 
 
@@ -236,6 +314,58 @@ def generate_mock_snapshot(iteration: int, config_state: ConfigurationState) -> 
     global_errors_class_1 = [max(0.0, min(1.0, random.gauss(0.32, 0.15))) for _ in range(200)]
     global_mu = (sum(global_errors_class_0) + sum(global_errors_class_1)) / 400
     
+    # 1. Identity Faceted Error Metrics (Toxicity exclusive)
+    # We facet FP and FN rates across Geral vs Women vs Gay/Lesbian
+    fp_geral = random.uniform(0.05, 0.12)
+    fn_geral = random.uniform(0.08, 0.15)
+    
+    # Simulate higher error rates for protected identity sub-groups to demonstrate model bias
+    fp_female = fp_geral * random.uniform(1.8, 2.5) 
+    fn_female = fn_geral * random.uniform(0.6, 1.1)
+    
+    fp_gay = fp_geral * random.uniform(2.2, 3.2) # High False Positive (e.g. flagging gay identity words as toxic)
+    fn_gay = fn_geral * random.uniform(0.5, 0.8)
+    
+    identity_metrics = {
+        "groups": ["Global Baseline", "Female Identity Context", "Sexual Orientation Context"],
+        "false_positives": [fp_geral, fp_female, fp_gay],
+        "false_negatives": [fn_geral, fn_female, fn_gay]
+    }
+    
+    # 2. Problematic High-Loss Slices (Toxicity exclusive)
+    problematic_slices = [
+        {"slice": "identity=homosexual_gay_or_lesbian & word=banned", "loss": 0.92, "support": 42},
+        {"slice": "identity=female & word=emotional", "loss": 0.84, "support": 64},
+        {"slice": "identity=homosexual_gay_or_lesbian & word=destroying", "loss": 0.79, "support": 38},
+        {"slice": "identity=female & word=politics", "loss": 0.65, "support": 92}
+    ]
+    
+    # 3. Subsequence Importance Heatmap (Malware exclusive)
+    # Map APIs against active pattern IDs
+    apis = ["API=RegOpenKeyEx", "API=CreateFileW", "API=WriteFile", "API=socket", "API=connect", "API=send", "API=CreateProcessW", "API=VirtualAllocEx"]
+    subsequence_importance = {
+        "apis": apis,
+        "patterns": [p["id"] for p in patterns],
+        "matrix": []
+    }
+    for p_idx, p in enumerate(patterns):
+        for api_idx, api in enumerate(apis):
+            # Assign importance score depending on whether the API appears in the pattern's sequences
+            has_api = any(api in item.get("itemset", []) or any(api.replace("API=", "") in it for it in item.get("itemset", [])) for item in p.get("example_slice", {}).get("sequence", []))
+            weight = random.uniform(0.6, 0.95) if has_api else random.uniform(0.01, 0.15)
+            subsequence_importance["matrix"].append([api_idx, p_idx, round(weight, 3)])
+            
+    # 4. Embeddings Scatter (Malware exclusive)
+    embeddings = [
+        {
+            "id": p["id"],
+            "coords": p["attributes"]["embedding_coords"],
+            "label": p["attributes"]["error_class_1"] > 0.5, # Malware (True) vs Benign (False)
+            "descriptor": p["pattern_descriptor"]
+        }
+        for p in patterns
+    ]
+
     return {
         "id": f"run-mock-{iteration}",
         "iteration": iteration,
@@ -251,7 +381,13 @@ def generate_mock_snapshot(iteration: int, config_state: ConfigurationState) -> 
             "stability": mcts_state["iterations_since_last_gain"],
             "rollout_success_rate": rollout_success_rate,
             "global_errors_class_0": global_errors_class_0,
-            "global_errors_class_1": global_errors_class_1
+            "global_errors_class_1": global_errors_class_1,
+            
+            # New domain visualization statistics
+            "identity_metrics": identity_metrics,
+            "problematic_slices": problematic_slices,
+            "subsequence_importance": subsequence_importance,
+            "embeddings": embeddings
         },
         "discovered_patterns": patterns
     }
@@ -279,51 +415,7 @@ def load_slice_history():
     except Exception as e:
         print(f"Error loading slice history: {e}")
 
-
-async def background_streamer(manager: ConnectionManager, config: ConfigurationState):
-    """Background task that streams mock slice data to connected clients."""
-    while True:
-        try:
-            if config.use_mock and config.status == RunStatus.RUNNING:
-                remaining_budget = config.get_remaining_budget()
-                
-                if remaining_budget > 0:
-                    global next_iteration
-                    try:
-                        record = generate_mock_snapshot(next_iteration, config)
-                        next_iteration += 1
-                        slice_history.append(record)
-                        config.consume_budget(5.0)
-                        
-                        save_slice_history()
-                        
-                        await manager.broadcast({"type": "snapshot", "snapshot": record})
-                        await manager.broadcast({
-                            "type": "status",
-                            "status": RunStatus.RUNNING.value,
-                            "budget": config.get_remaining_budget(),
-                            "slices_found": len(slice_history)
-                        })
-                    except Exception as e:
-                        print(f"Error generating snapshot: {e}")
-                else:
-                    config.status = RunStatus.PAUSED
-                    await manager.broadcast({
-                        "type": "status",
-                        "status": RunStatus.PAUSED.value,
-                        "budget": 0,
-                        "slices_found": len(slice_history)
-                    })
-            
-            # Sleep very briefly (0.05s) to let the entire budget run complete immediately
-            await asyncio.sleep(0.05)
-        
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"Error in background streamer: {e}")
-            await asyncio.sleep(1.0)
-
+# Removed background_streamer as AuditLens is strictly passive now and receives data via POST /api/snapshots
 
 # Global state
 connection_manager = ConnectionManager()
@@ -335,11 +427,9 @@ next_iteration = 1
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage app lifespan: startup and shutdown."""
-    global streamer_task
     
     print("Starting AuditLens...")
     load_slice_history()
-    streamer_task = asyncio.create_task(background_streamer(connection_manager, config_state))
     
     yield
     
@@ -389,6 +479,150 @@ async def get_index():
     return FileResponse(Path(__file__).parent / "index.html")
 
 
+@app.post("/api/initialize")
+async def initialize_audit(
+    model_server_url: str = Form("http://localhost:8002"),
+    domain: str = Form("malware"),
+    dataset_path: Optional[str] = Form(None),
+    use_mock: bool = Form(True),
+    identity_filters_json: Optional[str] = Form(None),
+    config_params_json: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None)
+):
+    global slice_history, next_iteration, mcts_state
+    
+    logger.info(f"[initialize_audit] Received initialize request: model_server_url={model_server_url}, domain={domain}, dataset_path={dataset_path}, use_mock={use_mock}, identity_filters={identity_filters_json}, config_params={config_params_json}")
+    
+    identity_filters = []
+    if identity_filters_json:
+        try:
+            identity_filters = json.loads(identity_filters_json)
+        except Exception as e:
+            print(f"Error parsing identity_filters_json: {e}")
+            
+    config_params = {}
+    if config_params_json:
+        try:
+            config_params = json.loads(config_params_json)
+        except Exception as e:
+            print(f"Error parsing config_params_json: {e}")
+
+    file_bytes = None
+    if file:
+        file_bytes = await file.read()
+        print(f"Ingested file via upload stream: {file.filename} ({len(file_bytes)} bytes)")
+
+    safe_dataset_path = None
+    if dataset_path:
+        try:
+            from data_loaders import secure_resolve_path
+            resolved = secure_resolve_path(dataset_path)
+            if resolved:
+                safe_dataset_path = str(resolved)
+        except PermissionError as e:
+            return {"status": "error", "message": str(e)}
+
+    try:
+        if domain == "toxicity":
+            loader = ToxicityDataLoader(
+                source_path=safe_dataset_path,
+                stream_data=file_bytes,
+                identity_filters=identity_filters
+            )
+        else:
+            loader = MalwareDataLoader(
+                source_path=safe_dataset_path,
+                stream_data=file_bytes
+            )
+        loader.load()
+        stats = loader.get_summary_stats()
+        print(f"Dataset preprocessed successfully: {stats}")
+    except Exception as e:
+        print(f"Data loading failed: {e}")
+        return {"status": "error", "message": f"Data loader error: {str(e)}"}
+
+    url_lower = model_server_url.lower()
+    is_simulator_url = any(endpoint in url_lower for endpoint in ["/api/mock-model-server", "/api/mock-model", "/api/simulator/handshake"])
+    
+    if is_simulator_url:
+        is_online = True
+        actual_use_mock = True
+        print(f"Model Server at {model_server_url} recognized as simulator endpoint. Running locally.")
+    else:
+        orchestrator = ModelOrchestrator(model_server_url)
+        is_online = orchestrator.check_health()
+        print(f"Model Server at {model_server_url} online: {is_online}")
+        actual_use_mock = use_mock or not is_online
+    
+    config_state.model_server_url = model_server_url
+    config_state.domain = domain
+    config_state.dataset_path = dataset_path
+    config_state.identity_filters = identity_filters
+    config_state.use_mock = actual_use_mock
+    
+    slice_history = []
+    next_iteration = 1
+    mcts_state = {
+        "top_quality": 0.5,
+        "iterations_since_last_gain": 0,
+        "total_explored_nodes": 0
+    }
+    
+    if config_params:
+        pydantic_cfg = ConfigParameters(**config_params)
+        config_state.update(pydantic_cfg)
+
+    orchestration_status = "local_simulation"
+    if not actual_use_mock and is_online:
+        try:
+            prep_ok, prep_res = orchestrator.prepare_model(
+                domain=domain,
+                dataset_path=safe_dataset_path,
+                config=config_params,
+                identity_filters=identity_filters
+            )
+            if not prep_ok:
+                raise Exception(f"Preparation failed: {prep_res.get('error', 'unknown error')}")
+                
+            start_ok, start_res = orchestrator.start_search(config=config_params)
+            if not start_ok:
+                raise Exception(f"Handshake failed: {start_res.get('error', 'unknown error')}")
+                
+            config_state.status = RunStatus.RUNNING
+            orchestration_status = "model_server_active"
+            print("Model Server orchestration initialized and search started.")
+        except Exception as e:
+            print(f"Failed to orchestrate external model server: {e}. Falling back to simulation.")
+            config_state.use_mock = True
+            config_state.status = RunStatus.RUNNING
+            orchestration_status = "simulation_fallback"
+    else:
+        config_state.status = RunStatus.RUNNING
+        
+    await connection_manager.broadcast({
+        "type": "status",
+        "status": config_state.status.value,
+        "budget": config_state.get_remaining_budget(),
+        "slices_found": 0
+    })
+
+    return {
+        "status": "initialized",
+        "orchestration": orchestration_status,
+        "domain": domain,
+        "use_mock": config_state.use_mock,
+        "dataset_stats": stats,
+        "config": {
+            "model_server_url": config_state.model_server_url,
+            "gamma": config_state.gamma,
+            "min_support": config_state.min_support,
+            "min_count_class": config_state.min_count_class,
+            "uct_factor": config_state.uct_factor,
+            "jaccard_threshold": config_state.jaccard_threshold,
+        }
+    }
+
+
 @app.post("/api/config")
 async def set_config(config: ConfigParameters):
     """
@@ -400,7 +634,25 @@ async def set_config(config: ConfigParameters):
     Returns:
         Confirmation of received configuration
     """
+    logger.info(f"[set_config] Received configuration update: {config.model_dump_json() if hasattr(config, 'model_dump_json') else str(config)}")
     config_state.update(config)
+    
+    if not config_state.use_mock:
+        try:
+            orchestrator = ModelOrchestrator(config_state.model_server_url)
+            config_payload = config.model_dump()
+            
+            # Always use resume to ensure the model thread is active and running with the new budget
+            logger.info("[set_config] Pushing config and enforcing active state (resume).")
+            res = orchestrator.control_search("resume", additional_budget=config_state.get_remaining_budget(), config=config_payload)
+            if res[0]:
+                config_state.status = RunStatus.RUNNING
+            else:
+                return {"status": "error", "error": f"Failed to push config to model: {res[1]}"}
+        except Exception as e:
+            logger.error(f"[set_config] Error pushing config to model: {e}")
+            return {"status": "error", "error": f"Connection error: {e}"}
+
     asyncio.create_task(connection_manager.broadcast({
         "type": "status",
         "status": config_state.status.value,
@@ -457,6 +709,7 @@ async def receive_slice(slice_data: Slice):
     Endpoint for an external parallel model to send slice data.
     The received data will be wrapped in an AuditSnapshot format and broadcast to all clients.
     """
+    logger.info(f"[receive_slice] Received slice: {slice_data.model_dump_json() if hasattr(slice_data, 'model_dump_json') else str(slice_data)}")
     pattern = {
         "id": slice_data.pattern_descriptor or f"p-received-{len(slice_history) + 1}",
         "quality_score": slice_data.quality_score_phi,
@@ -529,6 +782,7 @@ async def receive_snapshot(payload: dict = Body(...)):
     """
     Endpoint for receiving a full structured snapshot from the model.
     """
+    logger.info(f"[receive_snapshot] Received snapshot metrics: {payload.get('metrics', {})}, patterns_count: {len(payload.get('patterns', []))}, status: {payload.get('status', 'running')}, consume: {payload.get('consume', 0.0)}")
     metrics = payload.get("metrics", {})
     patterns = payload.get("patterns", [])
     status = payload.get("status", "running")
@@ -690,14 +944,173 @@ async def focus_pattern_endpoint(payload: dict = Body(...)):
         "weights": config_state.weights
     }
 
+def get_mock_metadata() -> dict:
+    return {
+        "status": "online",
+        "parameters": [
+            {
+                "name": "budget",
+                "label": "Search Budget (seconds)",
+                "type": "int",
+                "default_value": 120,
+                "required": True,
+                "modifiable": True,
+                "constraints": {
+                    "min": 5,
+                    "max": 3600
+                }
+            },
+            {
+                "name": "max_gap",
+                "label": "Max Sequence Gap",
+                "type": "int",
+                "default_value": 5,
+                "required": True,
+                "modifiable": False,
+                "constraints": {
+                    "min": 1,
+                    "max": 20
+                }
+            },
+            {
+                "name": "gamma",
+                "label": "Support Penalty (Gamma)",
+                "type": "float",
+                "default_value": 0.5,
+                "required": False,
+                "modifiable": True,
+                "constraints": {
+                    "min": 0.0,
+                    "max": 1.0
+                }
+            },
+            {
+                "name": "uct_factor",
+                "label": "UCT Factor (Exploration)",
+                "type": "float",
+                "default_value": 1.2,
+                "required": True,
+                "modifiable": True,
+                "constraints": {
+                    "min": 0.1,
+                    "max": 5.0
+                }
+            },
+            {
+                "name": "min_support",
+                "label": "Min Support Count",
+                "type": "int",
+                "default_value": 10,
+                "required": True,
+                "modifiable": False,
+                "constraints": {
+                    "min": 1
+                }
+            },
+            {
+                "name": "jaccard_threshold",
+                "label": "Jaccard Threshold",
+                "type": "float",
+                "default_value": 0.3,
+                "required": False,
+                "modifiable": False,
+                "constraints": {
+                    "min": 0.0,
+                    "max": 1.0
+                }
+            },
+            {
+                "name": "algorithm_mode",
+                "label": "Algorithm Execution Mode",
+                "type": "enum",
+                "default_value": "standard",
+                "required": True,
+                "modifiable": True,
+                "constraints": {
+                    "options": ["standard", "aggressive", "conservative"]
+                }
+            },
+            {
+                "name": "enable_pruning",
+                "label": "Enable Search Space Pruning",
+                "type": "boolean",
+                "default_value": True,
+                "required": False,
+                "modifiable": True
+            },
+            {
+                "name": "model_signature",
+                "label": "Model Signature Key",
+                "type": "string",
+                "default_value": "audit-default-v1",
+                "required": True,
+                "modifiable": False
+            }
+        ]
+    }
+
+@app.get("/api/mock-model-server/health")
+async def mock_model_server_health():
+    return {"status": "ok", "online": True}
+
+@app.get("/api/mock-model-server/metadata")
+async def mock_model_server_metadata():
+    return get_mock_metadata()
+
+@app.get("/api/simulator/handshake")
+async def simulator_handshake(domain: str = "malware"):
+    meta = get_mock_metadata()
+    meta["domain"] = domain
+    return meta
+
+@app.get("/api/mock-model")
+async def mock_model(domain: str = "malware"):
+    meta = get_mock_metadata()
+    meta["domain"] = domain
+    return meta
+
+@app.get("/api/control/check-health")
+async def check_health_endpoint(url: str):
+    """
+    Checks the connectivity status and metadata of the Model Server.
+    """
+    logger.info(f"[check_health_endpoint] Checking health/metadata of: {url}")
+    url_lower = url.lower()
+    if "/api/mock-model-server" in url_lower or "/api/mock-model" in url_lower or "/api/simulator/handshake" in url_lower:
+        domain = "toxicity" if "domain=toxicity" in url_lower else "malware"
+        meta = get_mock_metadata()
+        meta["domain"] = domain
+        logger.info(f"[check_health_endpoint] Detected simulator URL. Returning metadata for domain: {domain}")
+        return {"online": True, "metadata": meta}
+        
+    orchestrator = ModelOrchestrator(url)
+    online = orchestrator.check_health()
+    if not online:
+        return {"online": False, "error": f"Connection failed to Model Server at {url} (refused or timeout)"}
+        
+    meta_ok, meta_res = orchestrator.fetch_metadata()
+    if meta_ok:
+        return {"online": True, "metadata": meta_res}
+        
+    return {"online": True, "metadata": get_mock_metadata()}
+
+
 @app.post("/api/control/{action}")
-async def control_run(action: str):
+async def control_run(action: str, payload: Optional[dict] = Body(None)):
     """
     Control the execution state (pause, resume, finish, clear).
     """
+    logger.info(f"[control_run] Received control action: {action}")
     if action == "pause":
         config_state.status = RunStatus.PAUSED
     elif action == "resume":
+        if payload:
+            logger.info(f"[control_run] Resume payload received: {payload}")
+            try:
+                pydantic_cfg = ConfigParameters(**payload)
+                config_state.update(pydantic_cfg)
+            except Exception as e:
+                logger.error(f"[control_run] Failed to parse and apply config update: {e}")
         if config_state.get_remaining_budget() <= 0:
             config_state.budget_consumed = 0.0
         config_state.status = RunStatus.RUNNING
@@ -715,6 +1128,15 @@ async def control_run(action: str):
                 HISTORY_FILE.unlink()
             except Exception as e:
                 print(f"Error deleting history file: {e}")
+                
+        # Send clear to model server if online
+        if not config_state.use_mock:
+            try:
+                orchestrator = ModelOrchestrator(config_state.model_server_url)
+                orchestrator.control_search("clear")
+            except Exception as e:
+                print(f"Failed to clear model server: {e}")
+                
         await connection_manager.broadcast({
             "type": "clear",
             "status": config_state.status.value,
@@ -724,6 +1146,17 @@ async def control_run(action: str):
         return {"status": "cleared"}
     else:
         return {"error": "Invalid action"}
+
+    # Propagate lifecycle change to external model server if active
+    if not config_state.use_mock:
+        try:
+            orchestrator = ModelOrchestrator(config_state.model_server_url)
+            model_action = action
+            if action == "finish":
+                model_action = "stop"
+            orchestrator.control_search(model_action)
+        except Exception as e:
+            print(f"Failed to propagate action '{action}' to model server: {e}")
 
     await connection_manager.broadcast({
         "type": "status",
@@ -759,7 +1192,11 @@ async def get_current_config():
         "status": config_state.status.value,
         "use_mock": config_state.use_mock,
         "remaining_budget": config_state.get_remaining_budget(),
-        "budget_consumed": config_state.budget_consumed
+        "budget_consumed": config_state.budget_consumed,
+        "model_server_url": config_state.model_server_url,
+        "domain": config_state.domain,
+        "dataset_path": config_state.dataset_path,
+        "identity_filters": config_state.identity_filters
     }
     
     if config_state.budgets:
@@ -800,6 +1237,17 @@ async def control_post(payload: dict = Body(...)):
                 setattr(config_state, k, type(getattr(config_state, k))(v))
             else:
                 config_state.weights[k] = v
+                
+    # Propagate lifecycle change to external model server if active
+    if not config_state.use_mock and action in ('pause', 'resume', 'finish'):
+        try:
+            orchestrator = ModelOrchestrator(config_state.model_server_url)
+            model_action = action
+            if action == "finish":
+                model_action = "stop"
+            orchestrator.control_search(model_action)
+        except Exception as e:
+            print(f"Failed to propagate action '{action}' to model server in control_post: {e}")
     
     await connection_manager.broadcast({
         "type": "control_ack",
